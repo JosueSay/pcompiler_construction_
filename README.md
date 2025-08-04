@@ -8,3 +8,4 @@ A continuación se detallan las versiones actuales de las herramientas utilizada
 * **Python**: 3.10.12
 * **pip**: 25.2
 * **Docker**: 28.3.0 (build 38b7060)
+* **WSL2 (Windows Subsystem for Linux)**: v22.4.5 (o superior)
