@@ -209,10 +209,7 @@ __marimo__/
 
 # ANTLR
 .antlr/
-*.tokens
-*.interp
 
-## Generados por antlr
-# CompiscriptLexer.py
-# CompiscriptListener.py
-# CompiscriptParser.py
+# Ignorar todo dentro de antlr_gen pero dejar el README
+antlr_gen/* 
+!antlr_gen/README.md
