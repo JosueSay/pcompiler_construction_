@@ -209,3 +209,10 @@ __marimo__/
 
 # ANTLR
 .antlr/
+*.tokens
+*.interp
+
+## Generados por antlr
+# CompiscriptLexer.py
+# CompiscriptListener.py
+# CompiscriptParser.py
