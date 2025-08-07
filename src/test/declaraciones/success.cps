@@ -1,3 +1,8 @@
+let a = 42;
+let b = true;
+let c = "hola";
+
+
 // ✅ Declaraciones válidas con tipo explícito y asignación
 // let nombre: string = "Compiscript";
 // let edad: integer = 25;
