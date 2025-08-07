@@ -2,25 +2,31 @@ from antlr_gen.CompiscriptVisitor import CompiscriptVisitor
 from antlr_gen.CompiscriptParser import CompiscriptParser
 from semantic.validators.literal import validateLiteral
 from semantic.validators.identifier import validateIdentifier
+from logs.logger_semantic import log_semantic
 
 class VisitorCPS(CompiscriptVisitor):
     def __init__(self):
         self.errors = []
         self.symbolTable = {}
+        log_semantic("", new_session=True)
 
     def visitProgram(self, ctx: CompiscriptParser.ProgramContext):
         for stmt in ctx.statement():
             self.visit(stmt)
 
         if self.errors:
-            print("Semantic Errors:")
+            log_semantic("Semantic Errors:")
             for error in self.errors:
-                print(" -", error)
+                log_semantic(f" - {error}")
         else:
-            print("Type checking passed.")
+            log_semantic("Type checking passed.")
 
     def visitLiteralExpr(self, ctx: CompiscriptParser.LiteralExprContext):
-        return validateLiteral(ctx.getText(), self.errors)
+        value = ctx.getText()
+        log_semantic(f"Literal detected: {value}")
+        return validateLiteral(value, self.errors)
 
     def visitIdentifierExpr(self, ctx: CompiscriptParser.IdentifierExprContext):
-        return validateIdentifier(ctx.getText(), self.symbolTable, self.errors)
+        name = ctx.getText()
+        log_semantic(f"Identifier used: {name}")
+        return validateIdentifier(name, self.symbolTable, self.errors)
