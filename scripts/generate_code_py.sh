@@ -30,7 +30,7 @@ echo -e "\t\t $(pwd)"
 # echo -e "\t\t../../$OUTPUT_DIR"
 
 # Ejecutar ANTLR usando Java + JAR
-if java -jar "$ANTLR_PATH" -Dlanguage=Python3 -o "../../$OUTPUT_DIR" "$GRAMMAR_FILE"; then
+if java -jar "$ANTLR_PATH" -Dlanguage=Python3 -visitor -o "../../$OUTPUT_DIR" "$GRAMMAR_FILE"; then
   FLAG=true
 fi
 
