@@ -2,21 +2,22 @@ from antlr_gen.CompiscriptVisitor import CompiscriptVisitor
 from antlr_gen.CompiscriptParser import CompiscriptParser
 from semantic.validators.literal import validateLiteral
 from semantic.validators.identifier import validateIdentifier
-from semantic.custom_types import IntegerType, StringType, BoolType, FloatType, NullType
-from semantic.symbol_table import Symbol
-from semantic.type_system import getTypeWidth
 from semantic.symbol_kinds import SymbolCategory
+from semantic.scope_manager import ScopeManager
 from logs.logger_semantic import log_semantic
+
 
 class VisitorCPS(CompiscriptVisitor):
     def __init__(self):
         self.errors = []
-        self.symbolTable = {}
-        self.scopeId = 0
-        self.currentOffset = 0
+        self.scopeManager = ScopeManager()
         log_semantic("", new_session=True)
 
     def visitProgram(self, ctx: CompiscriptParser.ProgramContext):
+        """
+        Visita el nodo raíz del programa.
+        Recorre todas las sentencias, y al final imprime errores o símbolos.
+        """
         for stmt in ctx.statement():
             self.visit(stmt)
 
@@ -28,50 +29,49 @@ class VisitorCPS(CompiscriptVisitor):
             log_semantic("Type checking passed.")
         
         log_semantic("Símbolos declarados:")
-        for sym in self.symbolTable.values():
+        for sym in self.scopeManager.allSymbols():
             log_semantic(f" - {sym.name}: {sym.type} ({sym.category}), tamaño={sym.width}, offset={sym.offset}")
 
     def visitLiteralExpr(self, ctx: CompiscriptParser.LiteralExprContext):
+        """
+        Maneja expresiones literales (números, strings, booleanos).
+        """
         value = ctx.getText()
         log_semantic(f"Literal detected: {value}")
         return validateLiteral(value, self.errors)
 
     def visitIdentifierExpr(self, ctx: CompiscriptParser.IdentifierExprContext):
+        """
+        Maneja identificadores (nombres de variables).
+        """
         name = ctx.getText()
         log_semantic(f"Identifier used: {name}")
-        return validateIdentifier(name, self.symbolTable, self.errors)
-
-    def visitVariableDeclaration(self, ctx: CompiscriptParser.VariableDeclarationContext):
-        name = ctx.Identifier().getText()
-
-        # Evaluar solo si tiene expresión (initializer)
-        exprType = self.visit(ctx.initializer().expression()) if ctx.initializer() else None
-
-        if name in self.symbolTable:
-            msg = f"Variable '{name}' ya declarada."
+        symbol = self.scopeManager.lookup(name)
+        if symbol is None:
+            msg = f"Identificador '{name}' no está declarado."
             self.errors.append(msg)
             log_semantic(f"ERROR: {msg}")
-            return
+            return None
+        return symbol.type
 
-        # Si no tiene expresión, no se puede determinar el tipo
+    def visitVariableDeclaration(self, ctx: CompiscriptParser.VariableDeclarationContext):
+        """
+        Maneja declaraciones de variables.
+        """
+        name = ctx.Identifier().getText()
+
+        # Evaluar el tipo de la expresión asignada
+        exprType = self.visit(ctx.initializer().expression()) if ctx.initializer() else None
+
         if not exprType:
             msg = f"La variable '{name}' no tiene valor ni tipo explícito."
             self.errors.append(msg)
             log_semantic(f"ERROR: {msg}")
             return
 
-        # Obtener tamaño del tipo
-        width = getTypeWidth(exprType)
-
-        symbol = Symbol(
-            name=name,
-            type_=exprType,
-            category=SymbolCategory.VARIABLE,
-            scope_id=self.scopeId,
-            offset=self.currentOffset,
-            width=width
-        )
-        # Actualizar offset para siguiente símbolo
-        self.currentOffset += width
-        self.symbolTable[name] = symbol
-        log_semantic(f"Variable '{name}' declarada con tipo: {exprType}, tamaño: {width} bytes")
+        try:
+            symbol = self.scopeManager.addSymbol(name, exprType, category=SymbolCategory.VARIABLE)
+            log_semantic(f"Variable '{name}' declarada con tipo: {exprType}, tamaño: {symbol.width} bytes")
+        except Exception as e:
+            self.errors.append(str(e))
+            log_semantic(f"ERROR: {e}")
