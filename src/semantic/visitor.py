@@ -4,8 +4,8 @@ from semantic.validators.literal import validateLiteral
 from semantic.validators.identifier import validateIdentifier
 from semantic.symbol_kinds import SymbolCategory
 from semantic.scope_manager import ScopeManager
+from semantic.errors import SemanticError
 from logs.logger_semantic import log_semantic
-
 
 class VisitorCPS(CompiscriptVisitor):
     def __init__(self):
@@ -38,7 +38,7 @@ class VisitorCPS(CompiscriptVisitor):
         """
         value = ctx.getText()
         log_semantic(f"Literal detected: {value}")
-        return validateLiteral(value, self.errors)
+        return validateLiteral(value, self.errors, ctx)
 
     def visitIdentifierExpr(self, ctx: CompiscriptParser.IdentifierExprContext):
         """
@@ -48,9 +48,13 @@ class VisitorCPS(CompiscriptVisitor):
         log_semantic(f"Identifier used: {name}")
         symbol = self.scopeManager.lookup(name)
         if symbol is None:
-            msg = f"Identificador '{name}' no está declarado."
-            self.errors.append(msg)
-            log_semantic(f"ERROR: {msg}")
+            error = SemanticError(
+                f"Identificador '{name}' no está declarado.",
+                line=ctx.start.line,
+                column=ctx.start.column
+            )
+            self.errors.append(error)
+            log_semantic(f"ERROR: {error}")
             return None
         return symbol.type
 
@@ -64,14 +68,19 @@ class VisitorCPS(CompiscriptVisitor):
         exprType = self.visit(ctx.initializer().expression()) if ctx.initializer() else None
 
         if not exprType:
-            msg = f"La variable '{name}' no tiene valor ni tipo explícito."
-            self.errors.append(msg)
-            log_semantic(f"ERROR: {msg}")
+            error = SemanticError(
+                f"La variable '{name}' no tiene valor ni tipo explícito.",
+                line=ctx.start.line,
+                column=ctx.start.column
+            )
+            self.errors.append(error)
+            log_semantic(f"ERROR: {error}")
             return
 
         try:
             symbol = self.scopeManager.addSymbol(name, exprType, category=SymbolCategory.VARIABLE)
             log_semantic(f"Variable '{name}' declarada con tipo: {exprType}, tamaño: {symbol.width} bytes")
         except Exception as e:
-            self.errors.append(str(e))
-            log_semantic(f"ERROR: {e}")
+            error = SemanticError(str(e), line=ctx.start.line, column=ctx.start.column)
+            self.errors.append(error)
+            log_semantic(f"ERROR: {error}")
