@@ -32,7 +32,16 @@ class ScopeManager:
         self.scopeId -= 1
         return self.scopeId
 
-    def addSymbol(self, name, type_, category=SymbolCategory.VARIABLE):
+    def addSymbol(
+        self,
+        name,
+        type_,
+        category=SymbolCategory.VARIABLE,
+        *,
+        initialized=False,
+        init_value_type=None,
+        init_note=None
+    ):
         """
         Agrega un nuevo símbolo al entorno actual.
         
@@ -59,7 +68,10 @@ class ScopeManager:
             category=category,
             scope_id=self.scopeId,
             offset=offset,
-            width=width
+            width=width,
+            initialized=initialized,
+            init_value_type=init_value_type,
+            init_note=init_note
         )
 
         self.scopes[-1][name] = symbol

@@ -4,23 +4,14 @@ from logs.logger_semantic import log_semantic
 
 def validateIdentifier(name, symbolTable, errorList, ctx=None):
     """
-    Valida el uso de un identificador (variable) en la tabla de símbolos actual.
-
-    Args:
-        name (str): Nombre del identificador a validar.
-        symbolTable (dict): Tabla de símbolos del entorno actual.
-        errorList (list): Lista donde se agregan errores semánticos detectados.
-        ctx (ParserRuleContext, opcional): Contexto para extraer ubicación del error.
-
-    Returns:
-        Type: Tipo del símbolo si existe, o ErrorType si no está declarado.
+    Valida el uso de un identificador en una tabla plana (modo auxiliar).
+    Nota: Para asignaciones y verificación completa usar ScopeManager en el Visitor.
     """
     log_semantic(f"Validating identifier: {name}")
 
     symbol = symbolTable.get(name)
 
     if not symbol:
-        # Extraer línea y columna si se proporciona el contexto
         line = ctx.start.line if ctx else None
         column = ctx.start.column if ctx else None
         error = SemanticError(

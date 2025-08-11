@@ -4,16 +4,7 @@ from logs.logger_semantic import log_semantic
 
 def validateLiteral(text, errorList, ctx=None):
     """
-    Determina el tipo semántico de un literal dado.
-
-    Args:
-        text (str): Representación textual del literal (ej. '42', '"hola"', 'true').
-        errorList (list): Lista de errores semánticos donde se agrega si el literal no es válido.
-        ctx (ParserRuleContext, opcional): Contexto para capturar línea y columna.
-
-    Returns:
-        Type: Instancia del tipo correspondiente (IntegerType, StringType, BoolType, etc.),
-              o ErrorType si no se reconoce el literal.
+    Determina el tipo semántico de un literal.
     """
     log_semantic(f"Validating literal: {text}")
 
