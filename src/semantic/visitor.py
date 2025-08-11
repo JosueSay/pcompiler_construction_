@@ -8,10 +8,16 @@ from semantic.type_system import (
     isAssignable,
     resolveAnnotatedType,
     isReferenceType,
+    resultArithmetic,
+    resultModulo,
+    resultRelational,
+    resultEquality,
+    resultLogical,
+    resultUnaryMinus,
+    resultUnaryNot,
 )
 from logs.logger_semantic import log_semantic
-from semantic.custom_types import NullType
-
+from semantic.custom_types import NullType, ErrorType
 
 class VisitorCPS(CompiscriptVisitor):
     """
@@ -381,3 +387,225 @@ class VisitorCPS(CompiscriptVisitor):
     # Fallback por si ANTLR llama visit a otras alternativas sin método específico
     def visitExprNoAssign(self, ctx: CompiscriptParser.ExprNoAssignContext):
         return self.visitChildren(ctx)
+
+    # ------------------------------------------------
+    # Expresiones compuestas (operadores binarios/unarios)
+    # ------------------------------------------------
+
+    def visitAdditiveExpr(self, ctx: CompiscriptParser.AdditiveExprContext):
+        """
+        additiveExpr
+        : multiplicativeExpr (('+' | '-') multiplicativeExpr)*
+        """
+        children = list(ctx.getChildren())
+        if not children:
+            return None
+        t = self.visit(children[0])  # primer operando
+        i = 1
+        while i < len(children):
+            op = children[i].getText()         # '+' o '-'
+            rhs = self.visit(children[i+1])    # siguiente operando
+
+            # Pasamos el operador a resultArithmetic para soportar
+            # tanto aritmética como concatenación string + string
+            res = resultArithmetic(t, rhs, op)
+
+            if isinstance(res, ErrorType):
+                err = SemanticError(
+                    f"Operación aritmética inválida: {t} {op} {rhs}",
+                    line=ctx.start.line,
+                    column=ctx.start.column
+                )
+                self.errors.append(err)
+                log_semantic(f"ERROR: {err}")
+                t = ErrorType()
+            else:
+                t = res
+            i += 2
+        return t
+
+
+    def visitMultiplicativeExpr(self, ctx: CompiscriptParser.MultiplicativeExprContext):
+        """
+        multiplicativeExpr
+        : unaryExpr (('*' | '/' | '%') unaryExpr)*
+        """
+        children = list(ctx.getChildren())
+        if not children:
+            return None
+        t = self.visit(children[0])
+        i = 1
+        while i < len(children):
+            op = children[i].getText()       # '*', '/', o '%'
+            rhs = self.visit(children[i+1])
+
+            if op == '%':
+                res = resultModulo(t, rhs)
+            else:
+                # pasar el operador a resultArithmetic
+                res = resultArithmetic(t, rhs, op)
+
+            if isinstance(res, ErrorType):
+                err = SemanticError(
+                    f"Operación multiplicativa inválida: {t} {op} {rhs}",
+                    line=ctx.start.line, column=ctx.start.column
+                )
+                self.errors.append(err)
+                log_semantic(f"ERROR: {err}")
+                t = ErrorType()
+            else:
+                t = res
+            i += 2
+        return t
+
+
+    def visitRelationalExpr(self, ctx: CompiscriptParser.RelationalExprContext):
+        """
+        relationalExpr
+          : additiveExpr (('<' | '<=' | '>' | '>=') additiveExpr)*
+        """
+        children = list(ctx.getChildren())
+        if not children:
+            return None
+        # Estructura encadenada, el resultado siempre es boolean si las comparaciones son válidas.
+        # Evaluamos por pares; si alguna da error, propagamos ErrorType.
+        left_type = self.visit(children[0])
+        i = 1
+        final_type = None
+        while i < len(children):
+            op = children[i].getText()
+            right_type = self.visit(children[i+1])
+            res = resultRelational(left_type, right_type)
+            if isinstance(res, ErrorType):
+                err = SemanticError(
+                    f"Comparación no válida: {left_type} {op} {right_type}",
+                    line=ctx.start.line, column=ctx.start.column
+                )
+                self.errors.append(err)
+                log_semantic(f"ERROR: {err}")
+                final_type = ErrorType()
+            else:
+                final_type = res  # BoolType
+            left_type = right_type
+            i += 2
+        # Si no hubo operadores, retorna el tipo del lado izquierdo (caso de un solo operando).
+        return final_type if final_type is not None else left_type
+
+    def visitEqualityExpr(self, ctx: CompiscriptParser.EqualityExprContext):
+        """
+        equalityExpr
+          : relationalExpr (('==' | '!=') relationalExpr)*
+        """
+        children = list(ctx.getChildren())
+        if not children:
+            return None
+        left_type = self.visit(children[0])
+        i = 1
+        final_type = None
+        while i < len(children):
+            op = children[i].getText()
+            right_type = self.visit(children[i+1])
+            res = resultEquality(left_type, right_type)
+            if isinstance(res, ErrorType):
+                err = SemanticError(
+                    f"Igualdad no válida: {left_type} {op} {right_type}",
+                    line=ctx.start.line, column=ctx.start.column
+                )
+                self.errors.append(err)
+                log_semantic(f"ERROR: {err}")
+                final_type = ErrorType()
+            else:
+                final_type = res  # BoolType
+            left_type = right_type
+            i += 2
+        return final_type if final_type is not None else left_type
+
+    def visitLogicalAndExpr(self, ctx: CompiscriptParser.LogicalAndExprContext):
+        """
+        logicalAndExpr
+          : equalityExpr ('&&' equalityExpr)*
+        """
+        children = list(ctx.getChildren())
+        if not children:
+            return None
+        t = self.visit(children[0])
+        i = 1
+        while i < len(children):
+            op = children[i].getText()  # '&&'
+            rhs = self.visit(children[i+1])
+            res = resultLogical(t, rhs)
+            if isinstance(res, ErrorType):
+                err = SemanticError(
+                    f"Operación lógica inválida: {t} {op} {rhs}",
+                    line=ctx.start.line, column=ctx.start.column
+                )
+                self.errors.append(err)
+                log_semantic(f"ERROR: {err}")
+                t = ErrorType()
+            else:
+                t = res  # BoolType
+            i += 2
+        return t
+
+    def visitLogicalOrExpr(self, ctx: CompiscriptParser.LogicalOrExprContext):
+        """
+        logicalOrExpr
+          : logicalAndExpr ('||' logicalAndExpr)*
+        """
+        children = list(ctx.getChildren())
+        if not children:
+            return None
+        t = self.visit(children[0])
+        i = 1
+        while i < len(children):
+            op = children[i].getText()  # '||'
+            rhs = self.visit(children[i+1])
+            res = resultLogical(t, rhs)
+            if isinstance(res, ErrorType):
+                err = SemanticError(
+                    f"Operación lógica inválida: {t} {op} {rhs}",
+                    line=ctx.start.line, column=ctx.start.column
+                )
+                self.errors.append(err)
+                log_semantic(f"ERROR: {err}")
+                t = ErrorType()
+            else:
+                t = res
+            i += 2
+        return t
+
+    def visitUnaryExpr(self, ctx: CompiscriptParser.UnaryExprContext):
+        """
+        unaryExpr
+          : ('-' | '!') unaryExpr
+          | primaryExpr
+        """
+        # Si tiene 2 hijos, es unario; si no, delega a primary
+        if ctx.getChildCount() == 2:
+            op = ctx.getChild(0).getText()
+            inner = self.visit(ctx.unaryExpr())
+            if op == '-':
+                res = resultUnaryMinus(inner)
+                if isinstance(res, ErrorType):
+                    err = SemanticError(
+                        f"Operador '-' inválido sobre tipo {inner}",
+                        line=ctx.start.line, column=ctx.start.column
+                    )
+                    self.errors.append(err)
+                    log_semantic(f"ERROR: {err}")
+                return res
+            elif op == '!':
+                res = resultUnaryNot(inner)
+                if isinstance(res, ErrorType):
+                    err = SemanticError(
+                        f"Operador '!' inválido sobre tipo {inner}",
+                        line=ctx.start.line, column=ctx.start.column
+                    )
+                    self.errors.append(err)
+                    log_semantic(f"ERROR: {err}")
+                return res
+            else:
+                # operador desconocido (no debería suceder)
+                return ErrorType()
+        else:
+            return self.visit(ctx.primaryExpr())
