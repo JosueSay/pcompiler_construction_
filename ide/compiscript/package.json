@@ -1,0 +1,25 @@
+{
+  "name": "compiscript",
+  "displayName": "compiscript",
+  "description": "a new languange for U purposes",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.103.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [{
+      "id": "compiscript",
+      "aliases": ["compiscript", "compiscript"],
+      "extensions": [".cps"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "compiscript",
+      "scopeName": "source.cps",
+      "path": "./syntaxes/compiscript.tmLanguage.json"
+    }]
+  }
+}
