@@ -1,7 +1,3 @@
-# Tipos básicos soportados por Compiscript
-# Estos tipos se utilizan en el análisis semántico para validar expresiones,
-# declaraciones y tipos de retorno, así como para el manejo de memoria.
-
 class Type:
     """
     Clase base para todos los tipos de datos.
