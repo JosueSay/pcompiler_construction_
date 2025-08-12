@@ -10,4 +10,4 @@ ide/                           # Carpeta para el IDE (preferiblemente web)
 
 So what to do if you want this extension for rn?
 
-cp -r cps C:\Users\15-4JO\.vscode\extensions\
+cp -r cps ~\.vscode\extensions\
