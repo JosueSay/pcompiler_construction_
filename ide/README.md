@@ -7,3 +7,7 @@ ide/                           # Carpeta para el IDE (preferiblemente web)
 ├── frontend/                  # Código de la interfaz del usuario
 └── backend/                   # Conexión con compilador
 ```
+
+So what to do if you want this extension for rn?
+
+cp -r cps C:\Users\15-4JO\.vscode\extensions\

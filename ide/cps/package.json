@@ -1,0 +1,47 @@
+{
+  "name": "cps",
+  "displayName": "cps",
+  "description": "This is a new language support",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.103.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./out/extension.js",
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -p . -w"
+  },
+  "activationEvents": [
+    "onLanguage:cps"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "cps",
+        "aliases": [
+          "cps",
+          "CPS"
+        ],
+        "extensions": [
+          ".cps"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "cps",
+        "scopeName": "source.cps",
+        "path": "./syntaxes/cps.tmLanguage.json"
+      }
+    ]
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.102.0",
+    "@types/node": "^18.0.0",
+    "typescript": "^5.0.0"  
+  }
+}
