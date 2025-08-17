@@ -214,3 +214,4 @@ __marimo__/
 # Ignorar todo dentro de antlr_gen pero dejar el README
 antlr_gen/* 
 !antlr_gen/README.md
+pendiente.md

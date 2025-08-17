@@ -5,7 +5,6 @@ from logs.logger_semantic import log_semantic
 def validateIdentifier(name, symbolTable, errorList, ctx=None):
     """
     Valida el uso de un identificador en una tabla plana (modo auxiliar).
-    Nota: Para asignaciones y verificación completa usar ScopeManager en el Visitor.
     """
     log_semantic(f"Validating identifier: {name}")
 

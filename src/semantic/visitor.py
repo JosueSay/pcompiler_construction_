@@ -32,6 +32,7 @@ class VisitorCPS(CompiscriptVisitor):
     def __init__(self):
         self.errors = []
         self.scopeManager = ScopeManager()
+        self.known_classes = set()
         log_semantic("", new_session=True)
 
     # -------------------------
@@ -97,6 +98,8 @@ class VisitorCPS(CompiscriptVisitor):
             return
 
         declared_type = resolveAnnotatedType(ann)
+        self._validate_known_types(declared_type, ctx, f"variable '{name}'")
+
         if declared_type is None:
             err = SemanticError(
                 f"Tipo anotado inválido o no soportado en la variable '{name}'.",
@@ -172,8 +175,6 @@ class VisitorCPS(CompiscriptVisitor):
         - Constantes SIEMPRE se inicializan.
         - Se exige tipo declarado (sin inferencia).
         - El valor debe ser asignable al tipo declarado.
-        Nota: Si por error de sintaxis el '=' o la expresión faltan, ctx.expression() puede ser None.
-            En ese caso reportamos error semántico y continuamos sin romper el análisis.
         """
         name = ctx.Identifier().getText() if ctx.Identifier() else "<unnamed-const>"
         ann = ctx.typeAnnotation()
@@ -191,6 +192,8 @@ class VisitorCPS(CompiscriptVisitor):
             return
 
         declared_type = resolveAnnotatedType(ann)
+        self._validate_known_types(declared_type, ctx, f"constante '{name}'")
+        
         if declared_type is None:
             err = SemanticError(
                 f"Tipo anotado inválido o no soportado en la constante '{name}'.",
@@ -257,7 +260,7 @@ class VisitorCPS(CompiscriptVisitor):
 
     def visitAssignment(self, ctx: CompiscriptParser.AssignmentContext):
         """
-        statement → assignment ';'
+        statement -> assignment ';'
         Reglas:
           - LHS debe existir.
           - No se permite modificar constantes.
@@ -324,6 +327,19 @@ class VisitorCPS(CompiscriptVisitor):
     # Expresiones
     # -------------------------
     def visitLiteralExpr(self, ctx: CompiscriptParser.LiteralExprContext):
+        """
+        literalExpr
+        : Literal
+        | arrayLiteral
+        | 'null'
+        | 'true'
+        | 'false'
+        """
+        # arreglos -> delegar a visitArrayLiteral
+        if hasattr(ctx, "arrayLiteral") and ctx.arrayLiteral() is not None:
+            return self.visit(ctx.arrayLiteral())
+
+        # Para integer, string, true/false, null se usa validateLiteral
         value = ctx.getText()
         log_semantic(f"Literal detected: {value}")
         return validateLiteral(value, self.errors, ctx)
@@ -656,21 +672,129 @@ class VisitorCPS(CompiscriptVisitor):
     def visitNewExpr(self, ctx: CompiscriptParser.NewExprContext):
         """
         'new' Identifier '(' arguments? ')'
-        Semánticamente: retorna ClassType(Identifier) como referencia (heap a futuro).
-        Valida existencia de la clase si ya la declaras en la TS (opcional por ahora).
+        Retorna ClassType(Identifier). Valida que la clase exista.
         """
         class_name = ctx.Identifier().getText()
-
-        # Ejemplo de validación opcional si ya registras clases en la TS:
-        # sym = self.scopeManager.lookup(class_name)
-        # if sym is None or not isinstance(sym.type, ClassType) or sym.type.name != class_name:
-        #     err = SemanticError(
-        #         f"Clase '{class_name}' no declarada.",
-        #         line=ctx.start.line, column=ctx.start.column
-        #     )
-        #     self.errors.append(err)
-        #     log_semantic(f"ERROR: {err}")
-        #     return ClassType(class_name)
-
-        # TODO: validar argumentos del constructor en el futuro
+        if class_name not in self.known_classes:
+            err = SemanticError(
+                f"Clase '{class_name}' no declarada.",
+                line=ctx.start.line, column=ctx.start.column
+            )
+            self.errors.append(err)
+            log_semantic(f"ERROR: {err}")
+            # devolvemos el tipo igualmente para seguir el análisis de tipos
         return ClassType(class_name)
+
+
+    def _validate_known_types(self, t, ctx, where:str):
+        """
+        Verifica que cualquier ClassType presente (directo o dentro de ArrayType)
+        exista en self.known_classes. Si no existe, reporta error.
+        """
+        from semantic.custom_types import ClassType, ArrayType
+        # desempacar arrays hasta el base
+        base = t
+        while isinstance(base, ArrayType):
+            base = base.elem_type
+        if isinstance(base, ClassType):
+            if base.name not in self.known_classes:
+                err = SemanticError(
+                    f"Tipo de clase no declarado: '{base.name}' usado en {where}.",
+                    line=ctx.start.line, column=ctx.start.column
+                )
+                self.errors.append(err)
+                log_semantic(f"ERROR: {err}")
+
+    def visitLeftHandSide(self, ctx: CompiscriptParser.LeftHandSideContext):
+        """
+        leftHandSide: primaryAtom (suffixOp)* ;
+        Aplica en orden los sufijos sobre el tipo del primaryAtom.
+        Aquí resolvemos indexación: base debe ser ArrayType(T) e índice integer -> resultado T.
+        Las llamadas y accesos a propiedad se dejarán como 'no soportado aún' (error semántico).
+        """
+        from semantic.custom_types import ArrayType, ErrorType, IntegerType
+
+        # tipo del 'primario' (identificador, new, this, etc.)
+        t = self.visit(ctx.primaryAtom())
+
+        # aplicar todos los sufijos en orden
+        for suf in ctx.suffixOp():
+            # IndexExpr: '[' expression ']'
+            if isinstance(suf, CompiscriptParser.IndexExprContext):
+                # validar base arreglo
+                if not isinstance(t, ArrayType):
+                    err = SemanticError(
+                        f"Indexación sobre un valor no-arreglo: {t}",
+                        line=ctx.start.line, column=ctx.start.column
+                    )
+                    self.errors.append(err)
+                    log_semantic(f"ERROR: {err}")
+                    t = ErrorType()
+                    continue
+
+                idx_t = self.visit(suf.expression())
+                if not isinstance(idx_t, IntegerType):
+                    err = SemanticError(
+                        f"Índice no entero en acceso de arreglo: se encontró {idx_t}",
+                        line=ctx.start.line, column=ctx.start.column
+                    )
+                    self.errors.append(err)
+                    log_semantic(f"ERROR: {err}")
+                    t = ErrorType()
+                    continue
+
+                # tipo resultante es el tipo de elemento
+                t = t.elem_type
+                continue
+
+            # CallExpr y PropertyAccessExpr todavía no tipados:
+            if isinstance(suf, CompiscriptParser.CallExprContext):
+                err = SemanticError(
+                    "Llamadas a función/método aún no soportadas en esta fase.",
+                    line=ctx.start.line, column=ctx.start.column
+                )
+                self.errors.append(err)
+                log_semantic(f"ERROR: {err}")
+                t = ErrorType()
+                continue
+
+            if isinstance(suf, CompiscriptParser.PropertyAccessExprContext):
+                err = SemanticError(
+                    "Acceso a propiedades (obj.prop) aún no soportado en esta fase.",
+                    line=ctx.start.line, column=ctx.start.column
+                )
+                self.errors.append(err)
+                log_semantic(f"ERROR: {err}")
+                t = ErrorType()
+                continue
+
+        return t
+
+    def visitClassDeclaration(self, ctx: CompiscriptParser.ClassDeclarationContext):
+        """
+        classDeclaration: 'class' Identifier (':' Identifier)? '{' classMember* '}'
+        Aquí solo registramos el nombre para habilitar validación de tipos.
+        (Abrimos/cerramos scope de clase para cumplir manejo de ámbitos por bloque/clase.)
+        """
+        name = ctx.Identifier(0).getText()  # el primero es el nombre de la clase
+        if name in self.known_classes:
+            err = SemanticError(
+                f"Clase '{name}' ya declarada.",
+                line=ctx.start.line, column=ctx.start.column
+            )
+            self.errors.append(err)
+            log_semantic(f"ERROR: {err}")
+        else:
+            self.known_classes.add(name)
+            log_semantic(f"[class] declarada: {name}")
+
+        # Crear un scope para la clase (requerimiento de nuevos entornos por clase)
+        self.scopeManager.enterScope()
+        # (aún no registramos miembros ni métodos aquí)
+        for mem in ctx.classMember():
+            self.visit(mem)
+        size = self.scopeManager.exitScope()
+        log_semantic(f"[scope] clase '{name}' cerrada; frame_size={size} bytes")
+        return None
+
+
