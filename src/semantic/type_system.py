@@ -5,6 +5,8 @@ from semantic.custom_types import (
     BoolType,
     NullType,
     ErrorType,
+    ClassType,
+    ArrayType,
 )
 
 # --------------------------------------
@@ -15,6 +17,8 @@ TYPE_SIZES = {
     FloatType: 8,
     BoolType: 1,
     StringType: 8,   # tratado como puntero
+    ClassType: 8,
+    ArrayType: 8,
     NullType: 0,     # sin espacio propio
 }
 
@@ -40,12 +44,9 @@ def isBoolean(t):
 def isReferenceType(t):
     """
     Referencia == admite null.
-    Por ahora: string. Luego: ArrayType, ClassType, etc.
+    Por ahora: string, class, array.
     """
-    return isinstance(t, StringType)
-    # Ejemplo futuro:
-    # or isinstance(t, ArrayType) or isinstance(t, ClassType)
-
+    return isinstance(t, (StringType, ClassType, ArrayType))
 
 # --------------
 # Asignabilidad 
@@ -176,23 +177,42 @@ def resolveAnnotatedType(typeAnnotationCtx):
     """
     Convierte la anotación de tipo del parser a una instancia de tipo semántico.
 
-    Soporte actual: 'integer', 'boolean', 'string'
-    'float' no está en la gramática baseType actual, pero se deja preparado.
+    Gramática:
+      type: baseType ('[' ']')*
+      baseType: 'boolean' | 'integer' | 'string' | Identifier
+
+    Soporta arreglos anidados por conteo de '[]' en el texto,
+    y clases por nombre (Identifier) como ClassType(name).
     """
-    t = typeAnnotationCtx.type_().getText() if typeAnnotationCtx else None
-    if t is None:
+    ttxt = typeAnnotationCtx.type_().getText() if typeAnnotationCtx else None
+    if ttxt is None:
         return None
 
-    t = t.lower()
+    # Conteo de sufijos [] (array nesting)
+    dims = 0
+    while ttxt.endswith("[]"):
+        dims += 1
+        ttxt = ttxt[:-2]
 
-    if t == "integer":
-        return IntegerType()
-    if t == "boolean":
-        return BoolType()
-    if t == "string":
-        return StringType()
-    if t == "float":
-        return FloatType()  # si luego lo agregas a la gramática
+    base_txt = ttxt.strip()
 
-    # Futuro: arrays con '[]', identificadores de clase, etc.
-    return None
+    # builtins
+    base = None
+    if base_txt == "integer":
+        base = IntegerType()
+    elif base_txt == "boolean":
+        base = BoolType()
+    elif base_txt == "string":
+        base = StringType()
+    elif base_txt == "float":
+        base = FloatType()
+    else:
+        # Si no es builtin, lo tratamos como nombre de clase (Identifier)
+        # No validamos aquí existencia; eso lo hace el visitor (cuando vea usos).
+        base = ClassType(base_txt)
+
+    # Enrollar arreglos si hay dims > 0
+    ty = base
+    for _ in range(dims):
+        ty = ArrayType(ty)
+    return ty

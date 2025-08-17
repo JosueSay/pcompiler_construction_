@@ -56,3 +56,31 @@ class ErrorType(Type):
         Esto evita errores cascada en validaciones.
         """
         return isinstance(other, ErrorType)
+
+
+class ClassType(Type):
+    """
+    Representa el tipo de una clase por nombre (referencia).
+    """
+    def __init__(self, name: str):
+        self.name = name
+
+    def __eq__(self, other):
+        return isinstance(other, ClassType) and self.name == other.name
+
+    def __str__(self):
+        return self.name  # imprime el nombre de la clase
+
+
+class ArrayType(Type):
+    """
+    Arreglo homogéneo de un tipo base (referencia).
+    """
+    def __init__(self, elem_type: Type):
+        self.elem_type = elem_type
+
+    def __eq__(self, other):
+        return isinstance(other, ArrayType) and self.elem_type == other.elem_type
+
+    def __str__(self):
+        return f"{self.elem_type}[]"

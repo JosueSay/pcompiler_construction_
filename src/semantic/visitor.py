@@ -17,7 +17,7 @@ from semantic.type_system import (
     resultUnaryNot,
 )
 from logs.logger_semantic import log_semantic
-from semantic.custom_types import NullType, ErrorType
+from semantic.custom_types import NullType, ErrorType, ClassType, ArrayType
 
 class VisitorCPS(CompiscriptVisitor):
     """
@@ -55,9 +55,10 @@ class VisitorCPS(CompiscriptVisitor):
                 + (f", init_value_type={sym.init_value_type}" if sym.init_value_type else "")
                 + (f", init_note={sym.init_note}" if sym.init_note else "")
             )
+            storage_info = f", storage={sym.storage}, is_ref={sym.is_ref}"
             log_semantic(
                 f" - {sym.name}: {sym.type} ({sym.category}), "
-                f"tamaño={sym.width}, offset={sym.offset}{init_info}"
+                f"tamaño={sym.width}, offset={sym.offset}{storage_info}{init_info}"
             )
 
     # -------------------------
@@ -311,6 +312,14 @@ class VisitorCPS(CompiscriptVisitor):
         self.errors.append(err)
         log_semantic(f"ERROR: {err}")
 
+    def visitBlock(self, ctx: CompiscriptParser.BlockContext):
+        self.scopeManager.enterScope()
+        for st in ctx.statement():
+            self.visit(st)
+        size = self.scopeManager.exitScope()
+        log_semantic(f"[scope] bloque cerrado; frame_size={size} bytes")
+        return None
+
     # -------------------------
     # Expresiones
     # -------------------------
@@ -387,6 +396,40 @@ class VisitorCPS(CompiscriptVisitor):
     # Fallback por si ANTLR llama visit a otras alternativas sin método específico
     def visitExprNoAssign(self, ctx: CompiscriptParser.ExprNoAssignContext):
         return self.visitChildren(ctx)
+    
+    def visitArrayLiteral(self, ctx: CompiscriptParser.ArrayLiteralContext):
+        """
+        arrayLiteral: '[' (expression (',' expression)*)? ']'
+        Regla: todos los elementos deben ser del mismo tipo (o error).
+        Resultado: ArrayType(elem_type).
+        """
+        expr_ctxs = list(ctx.expression())
+        if not expr_ctxs:
+            err = SemanticError(
+                "Arreglo vacío sin tipo explícito no soportado aún.",
+                line=ctx.start.line, column=ctx.start.column
+            )
+            self.errors.append(err)
+            log_semantic(f"ERROR: {err}")
+            return ErrorType()
+
+        elem_types = [self.visit(e) for e in expr_ctxs]
+        if any(t is None for t in elem_types):
+            return ErrorType()
+
+        first = elem_types[0]
+        same = all(type(t) is type(first) for t in elem_types)
+        if not same:
+            err = SemanticError(
+                f"Elementos de arreglo con tipos inconsistentes: {[str(t) for t in elem_types]}",
+                line=ctx.start.line, column=ctx.start.column
+            )
+            self.errors.append(err)
+            log_semantic(f"ERROR: {err}")
+            return ErrorType()
+
+        return ArrayType(first)
+
 
     # ------------------------------------------------
     # Expresiones compuestas (operadores binarios/unarios)
@@ -609,3 +652,25 @@ class VisitorCPS(CompiscriptVisitor):
                 return ErrorType()
         else:
             return self.visit(ctx.primaryExpr())
+
+    def visitNewExpr(self, ctx: CompiscriptParser.NewExprContext):
+        """
+        'new' Identifier '(' arguments? ')'
+        Semánticamente: retorna ClassType(Identifier) como referencia (heap a futuro).
+        Valida existencia de la clase si ya la declaras en la TS (opcional por ahora).
+        """
+        class_name = ctx.Identifier().getText()
+
+        # Ejemplo de validación opcional si ya registras clases en la TS:
+        # sym = self.scopeManager.lookup(class_name)
+        # if sym is None or not isinstance(sym.type, ClassType) or sym.type.name != class_name:
+        #     err = SemanticError(
+        #         f"Clase '{class_name}' no declarada.",
+        #         line=ctx.start.line, column=ctx.start.column
+        #     )
+        #     self.errors.append(err)
+        #     log_semantic(f"ERROR: {err}")
+        #     return ClassType(class_name)
+
+        # TODO: validar argumentos del constructor en el futuro
+        return ClassType(class_name)
