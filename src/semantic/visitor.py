@@ -17,8 +17,7 @@ from semantic.type_system import (
     resultUnaryNot,
 )
 from logs.logger_semantic import log_semantic
-from semantic.custom_types import NullType, ErrorType, ClassType, ArrayType
-
+from semantic.custom_types import NullType, ErrorType, ClassType, ArrayType, IntegerType, BoolType, StringType, FloatType
 class VisitorCPS(CompiscriptVisitor):
     """
     Visitor semántico principal. Recorre el AST y valida:
@@ -33,6 +32,8 @@ class VisitorCPS(CompiscriptVisitor):
         self.errors = []
         self.scopeManager = ScopeManager()
         self.known_classes = set()
+        self.class_stack = []
+        self.in_method = False
         log_semantic("", new_session=True)
 
     # -------------------------
@@ -340,6 +341,90 @@ class VisitorCPS(CompiscriptVisitor):
         log_semantic(f"[scope] bloque cerrado; frame_size={size} bytes")
         return None
 
+    def visitFunctionDeclaration(self, ctx: CompiscriptParser.FunctionDeclarationContext):
+        """
+        functionDeclaration: 'function' Identifier '(' parameters? ')' (':' type)? block;
+        - Declara símbolo de función en el scope actual.
+        - Abre un nuevo scope para los parámetros y el cuerpo.
+        - Registra parámetros como símbolos category=PARAMETER.
+        """
+        name = ctx.Identifier().getText()
+
+        # 1) Tipos de parámetros
+        param_types = []
+        param_names = []
+        if ctx.parameters():
+            for p in ctx.parameters().parameter():
+                pname = p.Identifier().getText()
+                tctx = p.type_()  # puede ser None en la gramática, pero aquí exigimos tipo
+                if tctx is None:
+                    err = SemanticError(
+                        f"Parámetro '{pname}' debe declarar tipo.",
+                        line=p.start.line, column=p.start.column
+                    )
+                    self.errors.append(err)
+                    log_semantic(f"ERROR: {err}")
+                    # Seguimos, pero con ErrorType para evitar cascada
+                    ptype = ErrorType()
+                else:
+                    ptype = self._resolve_type_from_typectx(tctx)
+                    self._validate_known_types(ptype, p, f"parámetro '{pname}'")
+                param_names.append(pname)
+                param_types.append(ptype)
+
+        # 2) Tipo de retorno (opcional por ahora)
+        rtype = None
+        if ctx.type_():
+            rtype = self._resolve_type_from_typectx(ctx.type_())
+            self._validate_known_types(rtype, ctx, f"retorno de función '{name}'")
+
+        # 3) Declarar símbolo de función en el scope actual (evita duplicados en el mismo scope)
+        
+        try:
+            fsym = self.scopeManager.addSymbol(
+                name,
+                rtype if rtype is not None else NullType(),
+                category=SymbolCategory.FUNCTION,
+                initialized=True,
+                init_value_type=None,
+                init_note="decl"
+            )
+            # Guardar metadatos de firma en el símbolo
+            fsym.param_types = param_types
+            fsym.return_type = rtype
+            log_semantic(f"[function] declarada: {name}({', '.join(param_names)}) -> {rtype if rtype else 'void?'}")
+        except Exception as e:
+            err = SemanticError(str(e), line=ctx.start.line, column=ctx.start.column)
+            self.errors.append(err)
+            log_semantic(f"ERROR: {err}")
+            # Si no se pudo declarar la función, igual visitamos el bloque para continuar análisis
+            # pero sin abrir un scope de params vinculado (evitamos más ruido).
+            return self.visit(ctx.block())
+
+        # 4) Abrir scope de función y registrar parámetros
+        self.scopeManager.enterScope()
+        for pname, ptype in zip(param_names, param_types):
+            try:
+                psym = self.scopeManager.addSymbol(
+                    pname,
+                    ptype,
+                    category=SymbolCategory.PARAMETER,
+                    initialized=True,
+                    init_value_type=None,
+                    init_note="param"
+                )
+                log_semantic(f"[param] {pname}: {ptype}, offset={psym.offset}")
+            except Exception as e:
+                e2 = SemanticError(str(e), line=ctx.start.line, column=ctx.start.column)
+                self.errors.append(e2)
+                log_semantic(f"ERROR: {e2}")
+
+        # 5) Visitar el cuerpo de la función dentro de su scope
+        self.visit(ctx.block())
+        size = self.scopeManager.exitScope()
+        log_semantic(f"[scope] función '{name}' cerrada; frame_size={size} bytes")
+        return None
+
     # -------------------------
     # Expresiones
     # -------------------------
@@ -463,6 +548,20 @@ class VisitorCPS(CompiscriptVisitor):
 
         return ArrayType(first)
 
+    def visitThisExpr(self, ctx: CompiscriptParser.ThisExprContext):
+        """
+        'this' solo válido dentro de métodos; retorna ClassType(clase actual).
+        """
+        from semantic.custom_types import ClassType, ErrorType
+        if not self.in_method or not self.class_stack:
+            err = SemanticError(
+                "'this' solo puede usarse dentro de métodos de clase.",
+                line=ctx.start.line, column=ctx.start.column
+            )
+            self.errors.append(err)
+            log_semantic(f"ERROR: {err}")
+            return ErrorType()
+        return ClassType(self.class_stack[-1])
 
     # ------------------------------------------------
     # Expresiones compuestas (operadores binarios/unarios)
@@ -708,7 +807,7 @@ class VisitorCPS(CompiscriptVisitor):
         Verifica que cualquier ClassType presente (directo o dentro de ArrayType)
         exista en self.known_classes. Si no existe, reporta error.
         """
-        from semantic.custom_types import ClassType, ArrayType
+        
         # desempacar arrays hasta el base
         base = t
         while isinstance(base, ArrayType):
@@ -722,21 +821,51 @@ class VisitorCPS(CompiscriptVisitor):
                 self.errors.append(err)
                 log_semantic(f"ERROR: {err}")
 
+    def _resolve_type_from_typectx(self, type_ctx):
+        """
+        Resuelve un CompiscriptParser.TypeContext -> Type semántico.
+        Soporta baseType + '[]'*  (p.ej., Animal[][]).
+        """
+        if type_ctx is None:
+            return None
+
+        base_txt = type_ctx.baseType().getText()
+        # Import local para evitar ciclos
+
+        if base_txt == "integer":
+            t = IntegerType()
+        elif base_txt == "string":
+            t = StringType()
+        elif base_txt == "boolean":
+            t = BoolType()
+        else:
+            # Es un nombre de clase
+            t = ClassType(base_txt)
+
+        # Contar '[]' a partir de los hijos ('baseType', '[', ']', '[', ']', ...)
+        dims = (type_ctx.getChildCount() - 1) // 2
+        for _ in range(dims):
+            t = ArrayType(t)
+        return t
+
     def visitLeftHandSide(self, ctx: CompiscriptParser.LeftHandSideContext):
         """
         leftHandSide: primaryAtom (suffixOp)* ;
         Aplica en orden los sufijos sobre el tipo del primaryAtom.
-        Aquí resolvemos indexación: base debe ser ArrayType(T) e índice integer -> resultado T.
-        Las llamadas y accesos a propiedad se dejarán como 'no soportado aún' (error semántico).
+        - Indexación: base debe ser ArrayType(T) e índice integer -> resultado T.
+        - Acceso a propiedad: soporte básico cuando la base es ClassType de la clase actual
+        (p. ej., `this.prop` dentro del método). Busca el miembro en el scope de clase.
+        - Llamadas: aún no soportadas en esta fase.
         """
-        from semantic.custom_types import ArrayType, ErrorType, IntegerType
 
         # tipo del 'primario' (identificador, new, this, etc.)
         t = self.visit(ctx.primaryAtom())
 
         # aplicar todos los sufijos en orden
         for suf in ctx.suffixOp():
+            # --------------------
             # IndexExpr: '[' expression ']'
+            # --------------------
             if isinstance(suf, CompiscriptParser.IndexExprContext):
                 # validar base arreglo
                 if not isinstance(t, ArrayType):
@@ -764,7 +893,9 @@ class VisitorCPS(CompiscriptVisitor):
                 t = t.elem_type
                 continue
 
-            # CallExpr y PropertyAccessExpr todavía no tipados:
+            # --------------------
+            # CallExpr: '(' args? ')'
+            # --------------------
             if isinstance(suf, CompiscriptParser.CallExprContext):
                 err = SemanticError(
                     "Llamadas a función/método aún no soportadas en esta fase.",
@@ -775,7 +906,32 @@ class VisitorCPS(CompiscriptVisitor):
                 t = ErrorType()
                 continue
 
+            # --------------------
+            # PropertyAccessExpr: '.' Identifier
+            # --------------------
             if isinstance(suf, CompiscriptParser.PropertyAccessExprContext):
+                prop_name = suf.Identifier().getText()
+
+                # Soporte MVP: si la base es un objeto de la misma clase del método actual,
+                # resolvemos el miembro buscándolo en el scope visible (clase abierta debajo del método).
+                if isinstance(t, ClassType) and self.class_stack:
+                    current_cls = self.class_stack[-1]
+                    if t.name == current_cls:
+                        sym = self.scopeManager.lookup(prop_name)
+                        if sym is None:
+                            err = SemanticError(
+                                f"Miembro '{prop_name}' no declarado en clase '{current_cls}'.",
+                                line=ctx.start.line, column=ctx.start.column
+                            )
+                            self.errors.append(err)
+                            log_semantic(f"ERROR: {err}")
+                            t = ErrorType()
+                        else:
+                            # El tipo del acceso a propiedad es el tipo del miembro
+                            t = sym.type
+                        continue
+
+                # Cualquier otro caso todavía no soportado
                 err = SemanticError(
                     "Acceso a propiedades (obj.prop) aún no soportado en esta fase.",
                     line=ctx.start.line, column=ctx.start.column
@@ -790,19 +946,113 @@ class VisitorCPS(CompiscriptVisitor):
     def visitClassDeclaration(self, ctx: CompiscriptParser.ClassDeclarationContext):
         """
         classDeclaration: 'class' Identifier (':' Identifier)? '{' classMember* '}'
-        El pre-scan (visitProgram) ya agregó/validó el nombre en self.known_classes,
-        aquí solo abrimos el scope de clase y visitamos miembros.
+        - Abre *scope de clase*.
+        - Registra/visita miembros: campos (var/const) y métodos (function).
+        - No resolvemos aún herencia (':' Identifier) ni acceso a propiedades.
         """
         name = ctx.Identifier(0).getText()
         log_semantic(f"[class] definición: {name}")
 
-        # Crear un scope para la clase (requerimiento de entornos por clase)
+        # Abrir scope de clase
+        self.class_stack.append(name)
         self.scopeManager.enterScope()
+
+        # Visitar miembros
         for mem in ctx.classMember():
-            self.visit(mem)
+            if mem.functionDeclaration():
+                self._visitMethodDeclaration(mem.functionDeclaration(), current_class=name)
+            else:
+                # variableDeclaration | constantDeclaration
+                self.visit(mem)
+
         size = self.scopeManager.exitScope()
+        self.class_stack.pop()
         log_semantic(f"[scope] clase '{name}' cerrada; frame_size={size} bytes")
         return None
 
+    def _visitMethodDeclaration(self, ctx_fn: CompiscriptParser.FunctionDeclarationContext, *, current_class: str):
+        """
+        Declara un *método* dentro de una clase:
+        - Mangle de nombre: ClassName.method
+        - Inyecta parámetro implícito 'this: ClassType(ClassName)'
+        - Abre scope propio para params + cuerpo
+        """
+        from semantic.custom_types import ClassType, ErrorType, NullType, ArrayType
+        method_name = ctx_fn.Identifier().getText()
+        qname = f"{current_class}.{method_name}"
+
+        # 1) Param types (explícitos) + inyección de 'this'
+        param_types = [ClassType(current_class)]
+        param_names = ["this"]
+
+        if ctx_fn.parameters():
+            for p in ctx_fn.parameters().parameter():
+                pname = p.Identifier().getText()
+                tctx = p.type_()
+                if tctx is None:
+                    err = SemanticError(
+                        f"Parámetro '{pname}' debe declarar tipo (en método {qname}).",
+                        line=p.start.line, column=p.start.column
+                    )
+                    self.errors.append(err)
+                    log_semantic(f"ERROR: {err}")
+                    ptype = ErrorType()
+                else:
+                    ptype = self._resolve_type_from_typectx(tctx)
+                    self._validate_known_types(ptype, p, f"parámetro '{pname}' de método {qname}")
+                param_names.append(pname)
+                param_types.append(ptype)
+
+        # 2) Return type (opcional)
+        rtype = None
+        if ctx_fn.type_():
+            rtype = self._resolve_type_from_typectx(ctx_fn.type_())
+            self._validate_known_types(rtype, ctx_fn, f"retorno de método '{qname}'")
+
+        # 3) Declarar símbolo de *método* (category=FUNCTION) en scope de clase
+        try:
+            fsym = self.scopeManager.addSymbol(
+                qname,
+                rtype if rtype is not None else NullType(),
+                category=SymbolCategory.FUNCTION,
+                initialized=True,
+                init_value_type=None,
+                init_note="decl"
+            )
+            fsym.param_types = param_types
+            fsym.return_type = rtype
+            log_semantic(f"[method] declarada: {qname}({', '.join(param_names)}) -> {rtype if rtype else 'void?'}")
+        except Exception as e:
+            err = SemanticError(str(e), line=ctx_fn.start.line, column=ctx_fn.start.column)
+            self.errors.append(err)
+            log_semantic(f"ERROR: {err}")
+            # Igual visitar el cuerpo para continuar análisis
+            return self.visit(ctx_fn.block())
+
+        # 4) Abrir scope de método y registrar parámetros (incluye 'this')
+        self.scopeManager.enterScope()
+        self.in_method = True
+        for pname, ptype in zip(param_names, param_types):
+            try:
+                psym = self.scopeManager.addSymbol(
+                    pname,
+                    ptype,
+                    category=SymbolCategory.PARAMETER,
+                    initialized=True,
+                    init_value_type=None,
+                    init_note="param"
+                )
+                log_semantic(f"[param] {pname}: {ptype}, offset={psym.offset}")
+            except Exception as e:
+                e2 = SemanticError(str(e), line=ctx_fn.start.line, column=ctx_fn.start.column)
+                self.errors.append(e2)
+                log_semantic(f"ERROR: {e2}")
+
+        # 5) Cuerpo
+        self.visit(ctx_fn.block())
+        size = self.scopeManager.exitScope()
+        self.in_method = False
+        log_semantic(f"[scope] método '{qname}' cerrado; frame_size={size} bytes")
+        return None
 
 
