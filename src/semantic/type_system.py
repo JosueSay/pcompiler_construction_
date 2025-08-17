@@ -53,18 +53,30 @@ def isReferenceType(t):
 # --------------
 def isAssignable(target_type, value_type):
     """
-    Regla de asignabilidad:
-      - Mismo tipo => OK
-      - value_type es NullType y target es referencia => OK
-      - Caso contrario => NO
+    Reglas:
+      - Propagar ErrorType para no cascada.
+      - null asignable a tipos de referencia (string, class, array).
+      - ArrayType(T1) <- ArrayType(T2)  solo si T1 <- T2 (recursivo).
+      - ClassType(A) <- ClassType(B)    solo si A == B (por ahora sin herencia).
+      - Primitivos: mismo tipo exacto.
     """
     if isinstance(value_type, ErrorType):
-        return True  # evitar efecto cascada
-    if type(target_type) is type(value_type):
-        return True
+        return True  # evitar cascada
+
+    # null -> referencia
     if isinstance(value_type, NullType) and isReferenceType(target_type):
         return True
-    return False
+
+    # arrays: comparar elemento recursivamente
+    if isinstance(target_type, ArrayType) and isinstance(value_type, ArrayType):
+        return isAssignable(target_type.elem_type, value_type.elem_type)
+
+    # clases: mismo nombre
+    if isinstance(target_type, ClassType) and isinstance(value_type, ClassType):
+        return target_type == value_type  # usa __eq__ por nombre
+
+    # primitivos exactos
+    return type(target_type) is type(value_type)
 
 # ------------------------------
 # Reglas de resultados por operación

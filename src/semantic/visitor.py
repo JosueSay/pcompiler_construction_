@@ -39,6 +39,23 @@ class VisitorCPS(CompiscriptVisitor):
     # Entrada del programa
     # -------------------------
     def visitProgram(self, ctx: CompiscriptParser.ProgramContext):
+        # 1) Pre-scan: recolectar clases (para permitir referencias adelantadas)
+        for st in ctx.statement():
+            cd = st.classDeclaration() if hasattr(st, "classDeclaration") else None
+            if cd:
+                name = cd.Identifier(0).getText()
+                if name in self.known_classes:
+                    err = SemanticError(
+                        f"Clase '{name}' ya declarada.",
+                        line=cd.start.line, column=cd.start.column
+                    )
+                    self.errors.append(err)
+                    log_semantic(f"ERROR: {err}")
+                else:
+                    self.known_classes.add(name)
+                    log_semantic(f"[class] (pre-scan) declarada: {name}")
+
+        # 2) Visita normal de statements (tipos anotados ya pueden validarse)
         for stmt in ctx.statement():
             self.visit(stmt)
 
@@ -773,28 +790,19 @@ class VisitorCPS(CompiscriptVisitor):
     def visitClassDeclaration(self, ctx: CompiscriptParser.ClassDeclarationContext):
         """
         classDeclaration: 'class' Identifier (':' Identifier)? '{' classMember* '}'
-        Aquí solo registramos el nombre para habilitar validación de tipos.
-        (Abrimos/cerramos scope de clase para cumplir manejo de ámbitos por bloque/clase.)
+        El pre-scan (visitProgram) ya agregó/validó el nombre en self.known_classes,
+        aquí solo abrimos el scope de clase y visitamos miembros.
         """
-        name = ctx.Identifier(0).getText()  # el primero es el nombre de la clase
-        if name in self.known_classes:
-            err = SemanticError(
-                f"Clase '{name}' ya declarada.",
-                line=ctx.start.line, column=ctx.start.column
-            )
-            self.errors.append(err)
-            log_semantic(f"ERROR: {err}")
-        else:
-            self.known_classes.add(name)
-            log_semantic(f"[class] declarada: {name}")
+        name = ctx.Identifier(0).getText()
+        log_semantic(f"[class] definición: {name}")
 
-        # Crear un scope para la clase (requerimiento de nuevos entornos por clase)
+        # Crear un scope para la clase (requerimiento de entornos por clase)
         self.scopeManager.enterScope()
-        # (aún no registramos miembros ni métodos aquí)
         for mem in ctx.classMember():
             self.visit(mem)
         size = self.scopeManager.exitScope()
         log_semantic(f"[scope] clase '{name}' cerrada; frame_size={size} bytes")
         return None
+
 
 
