@@ -12,7 +12,8 @@
   "main": "./out/extension.js",
   "scripts": {
     "compile": "tsc -p .",
-    "watch": "tsc -p . -w"
+    "watch": "tsc -p . -w",
+    "gen": "antlr4ts -visitor -o src/parser src/grammar/Compiscript.g4"
   },
   "activationEvents": [
     "onLanguage:cps"
@@ -40,8 +41,12 @@
     ]
   },
   "devDependencies": {
-    "@types/vscode": "^1.102.0",
     "@types/node": "^18.0.0",
-    "typescript": "^5.0.0"  
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.6.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "antlr4ts": "^0.5.0-alpha.4"
   }
 }
