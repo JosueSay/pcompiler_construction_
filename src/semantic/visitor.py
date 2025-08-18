@@ -888,19 +888,31 @@ class VisitorCPS(CompiscriptVisitor):
         return ClassType(class_name)
 
 
-    def _validate_known_types(self, t, ctx, where:str):
+    def _validate_known_types(self, t, ctx, where: str):
         """
-        Verifica que cualquier ClassType presente (directo o dentro de ArrayType)
-        exista en self.known_classes. Si no existe, reporta error.
+        Verifica que ClassType exista y prohíbe void en arreglos.
         """
-        
-        # desempacar arrays hasta el base
         base = t
+        has_array = False
         while isinstance(base, ArrayType):
+            has_array = True
             base = base.elem_type
-            
+
+        # 1) void como base de arreglo: prohibido
+        if isinstance(base, VoidType) and has_array:
+            err = SemanticError(
+                f"Arreglo de 'void' no permitido usado en {where}.",
+                line=ctx.start.line, column=ctx.start.column
+            )
+            self.errors.append(err)
+            log_semantic(f"ERROR: {err}")
+            return
+
+        # 2) void “puro”: OK (p.ej. retorno de función), no validar como clase
         if isinstance(base, VoidType):
             return
+
+        # 3) clases deben existir
         if isinstance(base, ClassType):
             if base.name not in self.known_classes:
                 err = SemanticError(
