@@ -180,12 +180,7 @@ class ControlFlowAnalyzer:
     # switch
     # -------------------------
     def visitSwitchStatement(self, ctx):
-        """
-        Validación de tipos de 'case':
-          - Cada case expr debe ser del mismo tipo que el scrutinee.
-        Permitimos fall-through (sin warning por ahora).
-        """
-        # scrutinee
+        # 1) Tipo del scrutinee
         get_expr = getattr(ctx, "expression", None)
         scrutinee_ctx = None
         if callable(get_expr):
@@ -193,23 +188,28 @@ class ControlFlowAnalyzer:
             scrutinee_ctx = exprs[0] if exprs else None
         scrutinee_t = self.v.visit(scrutinee_ctx) if scrutinee_ctx else ErrorType()
 
-        # recolectar cases y validar
-        for e in self._collect_case_exprs(ctx):
-            et = self.v.visit(e)
-            if isinstance(et, ErrorType) or isinstance(scrutinee_t, ErrorType):
-                continue
-            if not self._same_type(scrutinee_t, et):
-                self.v._append_err(SemanticError(
-                    f"Tipo de 'case' ({et}) incompatible con el 'switch' ({scrutinee_t}).",
-                    line=e.start.line, column=e.start.column))
+        # 2) Validar tipos de 'case'
+        for c in _as_list(getattr(ctx, "switchCase", lambda: None)()):
+            for e in _as_list(c.expression()):
+                et = self.v.visit(e)
+                if not isinstance(scrutinee_t, ErrorType) and not isinstance(et, ErrorType):
+                    if not self._same_type(scrutinee_t, et):
+                        self.v._append_err(SemanticError(
+                            f"Tipo de 'case' ({et}) incompatible con el 'switch' ({scrutinee_t}).",
+                            line=e.start.line, column=e.start.column))
 
-        # visitar el cuerpo para activar otras validaciones
-        for n in self._walk(ctx):
-            try:
-                self.v.visit(n)
-            except Exception:
-                pass
+        # 3) Visitar SOLO los statements de cada case/default
+        for c in _as_list(getattr(ctx, "switchCase", lambda: None)()):
+            for st in _as_list(c.statement()):
+                self.v.visit(st)
+
+        d = getattr(ctx, "defaultCase", None)
+        d = d() if callable(d) else None
+        if d:
+            for st in _as_list(d.statement()):
+                self.v.visit(st)
         return None
+
 
     # ------ ALIAS para distintas gramáticas ------
     def visitSwitchStmt(self, ctx):      # alias común
