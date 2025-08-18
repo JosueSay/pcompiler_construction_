@@ -18,8 +18,8 @@ def main(argv):
         print("Errores encontrados:")
         for e in visitor.errors:
             print(f" - {e}")
-    else:
-        print("Visitor executed successfully.")
+    # else:
+        # print("Visitor executed successfully.")
 
 if __name__ == '__main__':
     main(sys.argv)

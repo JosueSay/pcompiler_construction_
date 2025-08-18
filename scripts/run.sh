@@ -8,7 +8,7 @@ if [ ! -d "venv" ]; then
 fi
 
 source venv/bin/activate
-echo "Entorno virtual activado."
+# echo "Entorno virtual activado."
 
 # Archivo de entrada por defecto
 DEFAULT_FILE="src/test/program.cps"

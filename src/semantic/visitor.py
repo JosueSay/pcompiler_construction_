@@ -13,14 +13,12 @@ from semantic.analyzers.statements import StatementsAnalyzer
 from semantic.analyzers.functions import FunctionsAnalyzer
 from semantic.analyzers.classes import ClassesAnalyzer
 from semantic.analyzers.returns import ReturnsAnalyzer
+from semantic.analyzers.controlFlow import ControlFlowAnalyzer
 
 class VisitorCPS(CompiscriptVisitor):
-    """
-    Visitor semántico orquestador que delega en módulos.
-    """
     def __init__(self):
-        self.errors = []                # retro-compat para tus logs existentes
-        self.diag = Diagnostics()       # wrapper nuevo (aún no usado en todos lados)
+        self.errors = []
+        self.diag = Diagnostics()
         self.scopeManager = ScopeManager()
         self.method_registry = MethodRegistry()
 
@@ -29,27 +27,23 @@ class VisitorCPS(CompiscriptVisitor):
         self.in_method = False
         self.fn_stack = []
         self.fn_ctx_stack = []
+        self.loop_depth = 0
 
-        # submódulos
         self.lvals = LValuesAnalyzer(self)
         self.exprs = ExpressionsAnalyzer(self, self.lvals)
         self.stmts = StatementsAnalyzer(self)
         self.funcs = FunctionsAnalyzer(self)
         self.classes = ClassesAnalyzer(self)
         self.returns = ReturnsAnalyzer(self)
+        self.ctrl = ControlFlowAnalyzer(self)
 
         log_semantic("", new_session=True)
 
-    # Utilidad para añadir errores (se mantiene lista "errors" por compat)
     def _append_err(self, err):
         self.errors.append(err)
         return self.diag.extend(err)
 
-    # -------------------------
-    # Programa
-    # -------------------------
     def visitProgram(self, ctx: CompiscriptParser.ProgramContext):
-        # Pre-scan de clases (para referencias adelantadas)
         for st in ctx.statement():
             cd = st.classDeclaration() if hasattr(st, "classDeclaration") else None
             if cd:
@@ -62,7 +56,6 @@ class VisitorCPS(CompiscriptVisitor):
                     self.known_classes.add(name)
                     log_semantic(f"[class] (pre-scan) declarada: {name}")
 
-        # Visita normal (una sola vez)
         for stmt in ctx.statement():
             self.visit(stmt)
 
@@ -85,10 +78,8 @@ class VisitorCPS(CompiscriptVisitor):
                 f" - {sym.name}: {sym.type} ({sym.category}), "
                 f"tamaño={sym.width}, offset={sym.offset}{storage_info}{init_info}"
             )
-        return None  # ← importante: no llames a super()
+        return None
 
-
-    
     # -------------------------
     # Delegaciones (STATEMENTS)
     # -------------------------
@@ -98,6 +89,20 @@ class VisitorCPS(CompiscriptVisitor):
     def visitConstantDeclaration(self, ctx): return self.stmts.visitConstantDeclaration(ctx)
     def visitAssignment(self, ctx):          return self.stmts.visitAssignment(ctx)
     def visitForeachStatement(self, ctx):    return self.stmts.visitForeachStatement(ctx)
+
+    # -------------------------
+    # Control de flujo
+    # -------------------------
+    def visitIfStatement(self, ctx):         return self.ctrl.visitIfStatement(ctx)
+    def visitWhileStatement(self, ctx):      return self.ctrl.visitWhileStatement(ctx)
+    def visitDoWhileStatement(self, ctx):    return self.ctrl.visitDoWhileStatement(ctx)
+    def visitForStatement(self, ctx):        return self.ctrl.visitForStatement(ctx)
+    def visitSwitchStatement(self, ctx):     return self.ctrl.visitSwitchStatement(ctx)
+    def visitSwitchStmt(self, ctx):          return self.ctrl.visitSwitchStatement(ctx)  # alias
+    def visitSwitch(self, ctx):              return self.ctrl.visitSwitchStatement(ctx)  # alias
+    def visitCaseStatement(self, ctx):       return self.ctrl.visitSwitchStatement(ctx)  # alias
+    def visitBreakStatement(self, ctx):      return self.ctrl.visitBreakStatement(ctx)
+    def visitContinueStatement(self, ctx):   return self.ctrl.visitContinueStatement(ctx)
 
     # -------------------------
     # Funciones / Métodos
@@ -123,9 +128,6 @@ class VisitorCPS(CompiscriptVisitor):
     def visitNewExpr(self, ctx):             return self.exprs.visitNewExpr(ctx)
     def visitLeftHandSide(self, ctx):        return self.exprs.visitLeftHandSide(ctx)
 
-    # Fallback
     def visitExprNoAssign(self, ctx):        return self.visitChildren(ctx)
 
-
-# Import al final para evitar loop
 from semantic.errors import SemanticError
