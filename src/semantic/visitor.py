@@ -4,6 +4,8 @@ from semantic.validators.literal import validateLiteral
 from semantic.symbol_kinds import SymbolCategory
 from semantic.scope_manager import ScopeManager
 from semantic.errors import SemanticError
+from semantic.class_handler import ClassHandler
+from semantic.custom_types import NullType, ErrorType, ClassType, StructType, ArrayType, IntegerType, BoolType, StringType, FloatType, VoidType
 from semantic.type_system import (
     isAssignable,
     resolveAnnotatedType,
@@ -34,6 +36,7 @@ class VisitorCPS(CompiscriptVisitor):
         self.known_classes = set()
         self.class_stack = []
         self.in_method = False
+        self.class_handler = ClassHandler(self.scopeManager)
         log_semantic("", new_session=True)
 
     # -------------------------
@@ -55,7 +58,7 @@ class VisitorCPS(CompiscriptVisitor):
                 else:
                     self.known_classes.add(name)
                     log_semantic(f"[class] (pre-scan) declarada: {name}")
-
+    
         # 2) Visita normal de statements (tipos anotados ya pueden validarse)
         for stmt in ctx.statement():
             self.visit(stmt)
@@ -79,6 +82,35 @@ class VisitorCPS(CompiscriptVisitor):
                 f" - {sym.name}: {sym.type} ({sym.category}), "
                 f"tamaño={sym.width}, offset={sym.offset}{storage_info}{init_info}"
             )
+    def visitPropertyAccessExpr(self, ctx: CompiscriptParser.PropertyAccessExprContext):
+        """
+        Acceso a propiedades: obj.prop
+        Valida que 'obj' sea ClassType o StructType y que la propiedad exista.
+        """
+        obj_type = self.visit(ctx.primaryAtom())
+        
+        if not isinstance(obj_type, (ClassType, StructType)):
+            err = SemanticError(
+                "Acceso a propiedad sobre un tipo que no es clase o struct.",
+                line=ctx.start.line, column=ctx.start.column
+            )
+            self.errors.append(err)
+            log_semantic(f"ERROR: {err}")
+            return ErrorType()
+
+        prop_name = ctx.Identifier().getText()
+        member_type = self.class_handler.resolve_member(obj_type, prop_name)
+        
+        if member_type is None:
+            err = SemanticError(
+                f"Miembro '{prop_name}' no declarado en '{obj_type.name}'.",
+                line=ctx.start.line, column=ctx.start.column
+            )
+            self.errors.append(err)
+            log_semantic(f"ERROR: {err}")
+            return ErrorType()
+
+        return member_type
 
     # -------------------------
     # Statements
@@ -874,18 +906,23 @@ class VisitorCPS(CompiscriptVisitor):
     def visitNewExpr(self, ctx: CompiscriptParser.NewExprContext):
         """
         'new' Identifier '(' arguments? ')'
-        Retorna ClassType(Identifier). Valida que la clase exista.
+        Retorna ClassType(Identifier). Valida que la clase exista usando ClassHandler.
         """
         class_name = ctx.Identifier().getText()
-        if class_name not in self.known_classes:
+        
+        class_type = self.class_handler.lookup_class(class_name)
+        
+        if class_type is None:
             err = SemanticError(
                 f"Clase '{class_name}' no declarada.",
                 line=ctx.start.line, column=ctx.start.column
             )
             self.errors.append(err)
             log_semantic(f"ERROR: {err}")
-            # devolvemos el tipo igualmente para seguir el análisis de tipos
-        return ClassType(class_name)
+            # Devolvemos el tipo igualmente para continuar análisis
+            return ClassType(class_name)
+
+        return class_type
 
 
     def _validate_known_types(self, t, ctx, where: str):
@@ -955,8 +992,7 @@ class VisitorCPS(CompiscriptVisitor):
         leftHandSide: primaryAtom (suffixOp)* ;
         Aplica en orden los sufijos sobre el tipo del primaryAtom.
         - Indexación: base debe ser ArrayType(T) e índice integer -> resultado T.
-        - Acceso a propiedad: soporte básico cuando la base es ClassType de la clase actual
-        (p. ej., `this.prop` dentro del método). Busca el miembro en el scope de clase.
+        - Acceso a propiedad: soporta 'this.prop' y delega a visitPropertyAccessExpr para otros casos.
         - Llamadas: aún no soportadas en esta fase.
         """
 
@@ -969,7 +1005,6 @@ class VisitorCPS(CompiscriptVisitor):
             # IndexExpr: '[' expression ']'
             # --------------------
             if isinstance(suf, CompiscriptParser.IndexExprContext):
-                # validar base arreglo
                 if not isinstance(t, ArrayType):
                     err = SemanticError(
                         f"Indexación sobre un valor no-arreglo: {t}",
@@ -991,7 +1026,6 @@ class VisitorCPS(CompiscriptVisitor):
                     t = ErrorType()
                     continue
 
-                # tipo resultante es el tipo de elemento
                 t = t.elem_type
                 continue
 
@@ -1012,38 +1046,25 @@ class VisitorCPS(CompiscriptVisitor):
             # PropertyAccessExpr: '.' Identifier
             # --------------------
             if isinstance(suf, CompiscriptParser.PropertyAccessExprContext):
-                prop_name = suf.Identifier().getText()
-
-                # Soporte MVP: si la base es un objeto de la misma clase del método actual,
-                # resolvemos el miembro buscándolo en el scope visible (clase abierta debajo del método).
-                if isinstance(t, ClassType) and self.class_stack:
-                    current_cls = self.class_stack[-1]
-                    if t.name == current_cls:
-                        sym = self.scopeManager.lookup(prop_name)
-                        if sym is None:
-                            err = SemanticError(
-                                f"Miembro '{prop_name}' no declarado en clase '{current_cls}'.",
-                                line=ctx.start.line, column=ctx.start.column
-                            )
-                            self.errors.append(err)
-                            log_semantic(f"ERROR: {err}")
-                            t = ErrorType()
-                        else:
-                            # El tipo del acceso a propiedad es el tipo del miembro
-                            t = sym.type
-                        continue
-
-                # Cualquier otro caso todavía no soportado
-                err = SemanticError(
-                    "Acceso a propiedades (obj.prop) aún no soportado en esta fase.",
-                    line=ctx.start.line, column=ctx.start.column
-                )
-                self.errors.append(err)
-                log_semantic(f"ERROR: {err}")
-                t = ErrorType()
-                continue
+                if isinstance(t, ClassType) and self.class_stack and t.name == self.class_stack[-1]:
+                    # acceso a miembros de la clase actual
+                    sym = self.scopeManager.lookup(suf.Identifier().getText())
+                    if sym is None:
+                        err = SemanticError(
+                            f"Miembro '{suf.Identifier().getText()}' no declarado en clase '{t.name}'.",
+                            line=ctx.start.line, column=ctx.start.column
+                        )
+                        self.errors.append(err)
+                        log_semantic(f"ERROR: {err}")
+                        t = ErrorType()
+                    else:
+                        t = sym.type
+                else:
+                    # delegar a visitPropertyAccessExpr para clases/struct externas
+                    t = self.visitPropertyAccessExpr(suf)
 
         return t
+
 
     def visitClassDeclaration(self, ctx: CompiscriptParser.ClassDeclarationContext):
         """
@@ -1053,6 +1074,10 @@ class VisitorCPS(CompiscriptVisitor):
         - No resolvemos aún herencia (':' Identifier) ni acceso a propiedades.
         """
         name = ctx.Identifier(0).getText()
+        parent = ctx.Identifier(1).getText() if ctx.Identifier(1) else None
+        self.class_handler.declare_class(name, parent)
+        self.known_classes.add(name) 
+
         log_semantic(f"[class] definición: {name}")
 
         # Abrir scope de clase
