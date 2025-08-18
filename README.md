@@ -81,7 +81,7 @@ Para habilitar **resaltado de sintaxis** de Compis Script en VS Code:
 
    ```bash
    cd ide/
-   cp -r ide/cps ~/.vscode/extensions/
+   cp -r cps ~\.vscode\extensions\
    ```
 
 2. Cierra y vuelve a abrir VS Code.
