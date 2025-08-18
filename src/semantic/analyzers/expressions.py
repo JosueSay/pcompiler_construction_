@@ -223,5 +223,40 @@ class ExpressionsAnalyzer:
                 line=ctx.start.line, column=ctx.start.column))
         return ClassType(class_name)
 
+    def visitPropertyAccessExpr(self, ctx):
+        """
+        expression '.' Identifier
+        Verifica acceso a propiedad en clases.
+        """
+        obj_type = self.v.visit(ctx.expression())
+
+        # Si el objeto no es clase -> error
+        from semantic.custom_types import ClassType
+        if not isinstance(obj_type, ClassType):
+            self.v._append_err(SemanticError(
+                f"No se puede acceder a propiedades de tipo '{obj_type}'.",
+                line=ctx.start.line, column=ctx.start.column))
+            return ErrorType()
+
+        class_name = obj_type.name
+        prop_name = ctx.Identifier().getText()
+
+        # Buscar clase registrada
+        class_type = self.v.class_handler.lookup_class(class_name)
+        if class_type is None:
+            self.v._append_err(SemanticError(
+                f"Clase '{class_name}' no declarada.",
+                line=ctx.start.line, column=ctx.start.column))
+            return ErrorType()
+
+        # Buscar atributo dentro de la clase
+        if prop_name not in class_type.attributes:
+            self.v._append_err(SemanticError(
+                f"Clase '{class_name}' no tiene propiedad '{prop_name}'.",
+                line=ctx.start.line, column=ctx.start.column))
+            return ErrorType()
+
+        return class_type.attributes[prop_name]
+
     def visitLeftHandSide(self, ctx):
         return self.lvalues.visitLeftHandSide(ctx)

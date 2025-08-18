@@ -1,37 +1,28 @@
-from .symbol_table import Symbol, SymbolTable
-from .custom_types import ClassType, StructType
+from semantic.custom_types import ClassType
+from semantic.errors import SemanticError
+from semantic.symbol_kinds import SymbolCategory
 
 class ClassHandler:
-    def __init__(self, symbol_table: SymbolTable):
-        self.symbol_table = symbol_table
+    def __init__(self):
+        # Diccionario con nombre de clase → ClassType
+        self.classes = {}
 
-    def declare_class(self, name, parent=None):
-        if self.symbol_table.lookup(name, current_scope_only=True):
-            raise Exception(f"Semantic Error: Class '{name}' already declared.")
+    def register_class(self, name: str, attributes: dict, methods: dict):
+        if name in self.classes:
+            raise SemanticError(f"Clase '{name}' ya declarada.")
+        self.classes[name] = ClassType(name, attributes, methods)
 
-        if parent and not isinstance(self.symbol_table.lookup(parent), ClassType):
-            raise Exception(f"Semantic Error: Parent class '{parent}' not found.")
+    def lookup_class(self, name: str):
+        return self.classes.get(name)
 
-        class_type = ClassType(name, parent)
-        self.symbol_table.define(Symbol(name, class_type))
-        return class_type
+    def lookup_attribute(self, class_name: str, attr: str):
+        ctype = self.lookup_class(class_name)
+        if ctype and attr in ctype.attributes:
+            return ctype.attributes[attr]
+        return None
 
-    def declare_struct(self, name):
-        if self.symbol_table.lookup(name, current_scope_only=True):
-            raise Exception(f"Semantic Error: Struct '{name}' already declared.")
-
-        struct_type = StructType(name)
-        self.symbol_table.define(Symbol(name, struct_type))
-        return struct_type
-
-    def add_member(self, owner_type, name, member_type):
-        if name in owner_type.members:
-            raise Exception(f"Semantic Error: Member '{name}' already declared in '{owner_type.name}'.")
-        owner_type.members[name] = member_type
-
-    def resolve_member(self, owner_type, name):
-        if name in owner_type.members:
-            return owner_type.members[name]
-        if isinstance(owner_type, ClassType) and owner_type.parent:
-            return self.resolve_member(owner_type.parent, name)
-        raise Exception(f"Semantic Error: Member '{name}' not found in '{owner_type.name}'.")
+    def lookup_method(self, class_name: str, method: str):
+        ctype = self.lookup_class(class_name)
+        if ctype and method in ctype.methods:
+            return ctype.methods[method]
+        return None
