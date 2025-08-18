@@ -173,6 +173,9 @@ class VisitorCPS(CompiscriptVisitor):
 
         declared_type = resolveAnnotatedType(ann)
         
+        if not self._validate_known_types(declared_type, ctx, f"variable '{name}'"):
+            return
+        
         if isinstance(declared_type, VoidType):
             err = SemanticError(
                 f"La variable '{name}' no puede ser de tipo void.",
@@ -181,8 +184,6 @@ class VisitorCPS(CompiscriptVisitor):
             self.errors.append(err)
             log_semantic(f"ERROR: {err}")
             return
-        
-        self._validate_known_types(declared_type, ctx, f"variable '{name}'")
 
         if declared_type is None:
             err = SemanticError(
@@ -276,6 +277,8 @@ class VisitorCPS(CompiscriptVisitor):
             return
 
         declared_type = resolveAnnotatedType(ann)
+        if not self._validate_known_types(declared_type, ctx, f"constante '{name}'"):
+            return
         
         if isinstance(declared_type, VoidType):
             err = SemanticError(
@@ -285,9 +288,6 @@ class VisitorCPS(CompiscriptVisitor):
             self.errors.append(err)
             log_semantic(f"ERROR: {err}")
             return
-
-        
-        self._validate_known_types(declared_type, ctx, f"constante '{name}'")
         
         if declared_type is None:
             err = SemanticError(
@@ -308,16 +308,7 @@ class VisitorCPS(CompiscriptVisitor):
             )
             self.errors.append(err)
             log_semantic(f"ERROR: {err}")
-            # Aún así intentamos registrar la constante para no encadenar más errores por 'no declarada'.
-            try:
-                self.scopeManager.addSymbol(name, declared_type, category=SymbolCategory.CONSTANT)
-                log_semantic(f"Constante '{name}' declarada (con error de inicialización).")
-            except Exception as e:
-                # Si también hay redeclaración, lo anotamos pero seguimos.
-                e2 = SemanticError(str(e), line=ctx.start.line, column=ctx.start.column)
-                self.errors.append(e2)
-                log_semantic(f"ERROR: {e2}")
-            return
+            return 
 
         # Camino normal: hay expresión; validamos asignabilidad
         rhs_type = self.visit(expr_ctx)
@@ -333,14 +324,6 @@ class VisitorCPS(CompiscriptVisitor):
             )
             self.errors.append(err)
             log_semantic(f"ERROR: {err}")
-            # Registramos la constante igual (con error) para evitar cascada de 'no declarada'
-            try:
-                self.scopeManager.addSymbol(name, declared_type, category=SymbolCategory.CONSTANT)
-                log_semantic(f"Constante '{name}' declarada (con error de tipo en inicialización).")
-            except Exception as e:
-                e2 = SemanticError(str(e), line=ctx.start.line, column=ctx.start.column)
-                self.errors.append(e2)
-                log_semantic(f"ERROR: {e2}")
             return
 
         # Registrar símbolo cuando todo está correcto
@@ -446,15 +429,14 @@ class VisitorCPS(CompiscriptVisitor):
                 else:
                     ptype = self._resolve_type_from_typectx(tctx)
                     if isinstance(ptype, VoidType):
-                        err = SemanticError(
-                            f"Parámetro '{pname}' no puede ser de tipo void.",
-                            line=p.start.line, column=p.start.column
-                            )
-                        self.errors.append(err)
-                        log_semantic(f"ERROR: {err}")
-                        ptype = ErrorType()           
+                        e = SemanticError(f"Parámetro '{pname}' no puede ser de tipo void.", p.start.line, p.start.column)
+                        self.errors.append(e)
+                        log_semantic(f"ERROR: {e}")
+
+                        ptype = ErrorType()
+                    elif not self._validate_known_types(ptype, p, f"parámetro '{pname}'"):
+                        ptype = ErrorType()
                     
-                    self._validate_known_types(ptype, p, f"parámetro '{pname}'")
                 param_names.append(pname)
                 param_types.append(ptype)
 
@@ -622,7 +604,10 @@ class VisitorCPS(CompiscriptVisitor):
             return ErrorType()
 
         first = elem_types[0]
-        same = all(type(t) is type(first) for t in elem_types)
+        if isinstance(first, ErrorType):
+            return ErrorType()
+
+        same = all(self._same_type(t, first) for t in elem_types)
         if not same:
             err = SemanticError(
                 f"Elementos de arreglo con tipos inconsistentes: {[str(t) for t in elem_types]}",
@@ -887,10 +872,29 @@ class VisitorCPS(CompiscriptVisitor):
             # devolvemos el tipo igualmente para seguir el análisis de tipos
         return ClassType(class_name)
 
+    def _same_type(self, a, b):
+        # Arreglos: compara recursivamente el elemento
+        if isinstance(a, ArrayType) and isinstance(b, ArrayType):
+            return self._same_type(a.elem_type, b.elem_type)
 
-    def _validate_known_types(self, t, ctx, where: str):
+        # Clases: compara nombre de la clase del lenguaje
+        if isinstance(a, ClassType) and isinstance(b, ClassType):
+            return a.name == b.name
+
+        # Primitivos: compara la clase del tipo
+        prims = (IntegerType, StringType, BoolType, FloatType, VoidType, NullType, ErrorType)
+        if isinstance(a, prims) and isinstance(b, prims):
+            return a.__class__ is b.__class__
+
+        # En cualquier otro caso, no son iguales
+        return False
+
+    def _validate_known_types(self, t, ctx, where: str) -> bool:
         """
         Verifica que ClassType exista y prohíbe void en arreglos.
+        Return:
+        True  -> válido
+        False -> error ya reportado
         """
         base = t
         has_array = False
@@ -906,21 +910,23 @@ class VisitorCPS(CompiscriptVisitor):
             )
             self.errors.append(err)
             log_semantic(f"ERROR: {err}")
-            return
+            return False
 
         # 2) void “puro”: OK (p.ej. retorno de función), no validar como clase
         if isinstance(base, VoidType):
-            return
+            return True
 
         # 3) clases deben existir
-        if isinstance(base, ClassType):
-            if base.name not in self.known_classes:
-                err = SemanticError(
-                    f"Tipo de clase no declarado: '{base.name}' usado en {where}.",
-                    line=ctx.start.line, column=ctx.start.column
-                )
-                self.errors.append(err)
-                log_semantic(f"ERROR: {err}")
+        if isinstance(base, ClassType) and base.name not in self.known_classes:
+            err = SemanticError(
+                f"Tipo de clase no declarado: '{base.name}' usado en {where}.",
+                line=ctx.start.line, column=ctx.start.column
+            )
+            self.errors.append(err)
+            log_semantic(f"ERROR: {err}")
+            return False
+
+        return True
 
     def _resolve_type_from_typectx(self, type_ctx):
         """
@@ -1115,7 +1121,7 @@ class VisitorCPS(CompiscriptVisitor):
         try:
             fsym = self.scopeManager.addSymbol(
                 qname,
-                rtype if rtype is not None else NullType(),
+                rtype if rtype is not None else VoidType(),
                 category=SymbolCategory.FUNCTION,
                 initialized=True,
                 init_value_type=None,
