@@ -17,7 +17,7 @@ from semantic.type_system import (
     resultUnaryNot,
 )
 from logs.logger_semantic import log_semantic
-from semantic.custom_types import NullType, ErrorType, ClassType, ArrayType, IntegerType, BoolType, StringType, FloatType, VoidType
+from semantic.custom_types import NullType, ErrorType, ClassType, ArrayType, IntegerType, BoolType, StringType, FloatType, VoidType, FunctionType
 class VisitorCPS(CompiscriptVisitor):
     """
     Visitor semántico principal. Recorre el AST y valida:
@@ -34,6 +34,8 @@ class VisitorCPS(CompiscriptVisitor):
         self.known_classes = set()
         self.class_stack = []
         self.in_method = False
+        self.fn_stack = []
+        self.method_table = {}
         log_semantic("", new_session=True)
 
     # -------------------------
@@ -487,11 +489,63 @@ class VisitorCPS(CompiscriptVisitor):
                 self.errors.append(e2)
                 log_semantic(f"ERROR: {e2}")
 
-        # 5) Visitar el cuerpo de la función dentro de su scope
+        expected_r = rtype if rtype is not None else VoidType()
+        self.fn_stack.append(expected_r)
         self.visit(ctx.block())
+        self.fn_stack.pop()
+
+
+        # 5) Visitar el cuerpo de la función dentro de su scope
         size = self.scopeManager.exitScope()
         log_semantic(f"[scope] función '{name}' cerrada; frame_size={size} bytes")
         return None
+
+    def visitReturnStatement(self, ctx: CompiscriptParser.ReturnStatementContext):
+        # return (expression)? ';'
+        if not self.fn_stack:
+            err = SemanticError(
+                "'return' fuera de una función.",
+                line=ctx.start.line, column=ctx.start.column
+            )
+            self.errors.append(err)
+            log_semantic(f"ERROR: {err}")
+            return None
+
+        expected = self.fn_stack[-1]
+        has_expr = ctx.expression() is not None
+
+        if isinstance(expected, VoidType):
+            if has_expr:
+                err = SemanticError(
+                    "La función 'void' no debe retornar un valor.",
+                    line=ctx.start.line, column=ctx.start.column
+                )
+                self.errors.append(err)
+                log_semantic(f"ERROR: {err}")
+            # ok: return; sin valor
+            return None
+
+        # función con retorno no-void
+        if not has_expr:
+            err = SemanticError(
+                "Se esperaba un valor en 'return'.",
+                line=ctx.start.line, column=ctx.start.column
+            )
+            self.errors.append(err)
+            log_semantic(f"ERROR: {err}")
+            return None
+
+        value_t = self.visit(ctx.expression())
+        from semantic.type_system import isAssignable
+        if not isAssignable(expected, value_t):
+            err = SemanticError(
+                f"Tipo de retorno incompatible: no se puede asignar {value_t} a {expected}.",
+                line=ctx.start.line, column=ctx.start.column
+            )
+            self.errors.append(err)
+            log_semantic(f"ERROR: {err}")
+        return None
+
 
     # -------------------------
     # Expresiones
@@ -514,23 +568,27 @@ class VisitorCPS(CompiscriptVisitor):
         log_semantic(f"Literal detected: {value}")
         return validateLiteral(value, self.errors, ctx)
 
-    def visitIdentifierExpr(self, ctx: CompiscriptParser.IdentifierExprContext):
-        """
-        Uso de identificador en expresión.
-        """
+    def visitIdentifierExpr(self, ctx):
         name = ctx.getText()
         log_semantic(f"Identifier used: {name}")
         sym = self.scopeManager.lookup(name)
+
         if sym is None:
             error = SemanticError(
                 f"Identificador '{name}' no está declarado.",
-                line=ctx.start.line,
-                column=ctx.start.column
+                line=ctx.start.line, column=ctx.start.column
             )
             self.errors.append(error)
             log_semantic(f"ERROR: {error}")
             return None
+
+        # Si el símbolo es función, expón un FunctionType (para soportar CallExpr en suffixOp)
+        if sym.category == SymbolCategory.FUNCTION:
+            rtype = sym.return_type if sym.return_type is not None else VoidType()
+            return FunctionType(sym.param_types, rtype)
+
         return sym.type
+
 
     def visitAssignExpr(self, ctx: CompiscriptParser.AssignExprContext):
         """
@@ -1005,13 +1063,49 @@ class VisitorCPS(CompiscriptVisitor):
             # CallExpr: '(' args? ')'
             # --------------------
             if isinstance(suf, CompiscriptParser.CallExprContext):
-                err = SemanticError(
-                    "Llamadas a función/método aún no soportadas en esta fase.",
-                    line=ctx.start.line, column=ctx.start.column
-                )
-                self.errors.append(err)
-                log_semantic(f"ERROR: {err}")
-                t = ErrorType()
+                # 1) El callee debe ser invocable
+                if not isinstance(t, FunctionType):
+                    err = SemanticError(
+                        "Llamada a algo que no es función.",
+                        line=ctx.start.line, column=ctx.start.column
+                    )
+                    self.errors.append(err)
+                    log_semantic(f"ERROR: {err}")
+                    t = ErrorType()
+                    continue
+
+                # 2) Tipos de argumentos
+                arg_types = []
+                if suf.arguments():
+                    for e in suf.arguments().expression():
+                        arg_types.append(self.visit(e))
+
+                # 3) Aridad
+                expected = len(t.param_types)
+                got = len(arg_types)
+                if got != expected:
+                    err = SemanticError(
+                        f"Número de argumentos inválido: esperados {expected}, recibidos {got}.",
+                        line=ctx.start.line, column=ctx.start.column
+                    )
+                    self.errors.append(err)
+                    log_semantic(f"ERROR: {err}")
+                    t = ErrorType()
+                    continue
+
+                # 4) Tipos por posición
+                from semantic.type_system import isAssignable
+                ok = True
+                for i, (pt, at) in enumerate(zip(t.param_types, arg_types), start=1):
+                    if not isAssignable(pt, at):
+                        err = SemanticError(
+                            f"Argumento #{i} incompatible: no se puede asignar {at} a {pt}.",
+                            line=ctx.start.line, column=ctx.start.column
+                        )
+                        self.errors.append(err)
+                        log_semantic(f"ERROR: {err}")
+                        ok = False
+                t = t.return_type if ok else ErrorType()
                 continue
 
             # --------------------
@@ -1020,24 +1114,48 @@ class VisitorCPS(CompiscriptVisitor):
             if isinstance(suf, CompiscriptParser.PropertyAccessExprContext):
                 prop_name = suf.Identifier().getText()
 
-                # Soporte MVP: si la base es un objeto de la misma clase del método actual,
-                # resolvemos el miembro buscándolo en el scope visible (clase abierta debajo del método).
-                if isinstance(t, ClassType) and self.class_stack:
-                    current_cls = self.class_stack[-1]
-                    if t.name == current_cls:
-                        sym = self.scopeManager.lookup(prop_name)
-                        if sym is None:
-                            err = SemanticError(
-                                f"Miembro '{prop_name}' no declarado en clase '{current_cls}'.",
-                                line=ctx.start.line, column=ctx.start.column
-                            )
-                            self.errors.append(err)
-                            log_semantic(f"ERROR: {err}")
-                            t = ErrorType()
-                        else:
-                            # El tipo del acceso a propiedad es el tipo del miembro
-                            t = sym.type
+                # Si la base es un objeto de clase X, intentamos resolver el método "X.prop_name"
+                if isinstance(t, ClassType):
+                    qname = f"{t.name}.{prop_name}"
+
+                    # Primero intenta en la tabla persistente de métodos
+                    mt = self.method_table.get(qname)
+                    if mt is not None:
+                        param_types, rtype = mt
+                        # Exponer un FunctionType invocable desde instancia:
+                        # La firma almacenada incluye 'this' como primer parámetro,
+                        # para llamada vía instancia lo removemos.
+                        ret_t = rtype if rtype is not None else VoidType()
+                        ftype = FunctionType(param_types[1:], ret_t)
+                        try:
+                            setattr(ftype, "_bound_receiver", t.name)  # opcional
+                        except Exception:
+                            pass
+                        t = ftype
                         continue
+
+                    # (opcional) fallback: por si alguna vez dejas el símbolo en scope
+                    sym = self.scopeManager.lookup(qname)
+                    if sym is not None and sym.category == SymbolCategory.FUNCTION:
+                        ret_t = sym.return_type if sym.return_type is not None else VoidType()
+                        ftype = FunctionType(sym.param_types[1:], ret_t)
+                        try:
+                            setattr(ftype, "_bound_receiver", t.name)
+                        except Exception:
+                            pass
+                        t = ftype
+                        continue
+
+                    # Si no existe, error:
+                    err = SemanticError(
+                        f"Miembro '{prop_name}' no declarado en clase '{t.name}'.",
+                        line=ctx.start.line, column=ctx.start.column
+                    )
+                    self.errors.append(err)
+                    log_semantic(f"ERROR: {err}")
+                    t = ErrorType()
+                    continue
+
 
                 # Cualquier otro caso todavía no soportado
                 err = SemanticError(
@@ -1085,13 +1203,14 @@ class VisitorCPS(CompiscriptVisitor):
         - Inyecta parámetro implícito 'this: ClassType(ClassName)'
         - Abre scope propio para params + cuerpo
         """
-        from semantic.custom_types import ClassType, ErrorType, NullType, ArrayType
         method_name = ctx_fn.Identifier().getText()
         qname = f"{current_class}.{method_name}"
 
         # 1) Param types (explícitos) + inyección de 'this'
         param_types = [ClassType(current_class)]
         param_names = ["this"]
+        self.method_table[qname] = (param_types, rtype)
+
 
         if ctx_fn.parameters():
             for p in ctx_fn.parameters().parameter():
@@ -1155,9 +1274,14 @@ class VisitorCPS(CompiscriptVisitor):
                 e2 = SemanticError(str(e), line=ctx_fn.start.line, column=ctx_fn.start.column)
                 self.errors.append(e2)
                 log_semantic(f"ERROR: {e2}")
-
-        # 5) Cuerpo
+        
+        expected_r = rtype if rtype is not None else VoidType()
+        self.fn_stack.append(expected_r)
         self.visit(ctx_fn.block())
+        self.fn_stack.pop()
+        
+        
+        # 5) Cuerpo
         size = self.scopeManager.exitScope()
         self.in_method = False
         log_semantic(f"[scope] método '{qname}' cerrado; frame_size={size} bytes")

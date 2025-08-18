@@ -87,3 +87,21 @@ class ArrayType(Type):
 
     def __str__(self):
         return f"{self.elem_type}[]"
+
+class FunctionType(Type):
+    def __init__(self, param_types, return_type):
+        self.param_types = param_types or []
+        self.return_type = return_type
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, FunctionType) and
+            len(self.param_types) == len(other.param_types) and
+            all(a == b for a, b in zip(self.param_types, other.param_types)) and
+            self.return_type == other.return_type
+        )
+
+    def __str__(self):
+        params = ", ".join(str(p) for p in self.param_types)
+        ret = str(self.return_type) if self.return_type else "void"
+        return f"({params}) -> {ret}"
