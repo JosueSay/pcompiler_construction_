@@ -11,7 +11,11 @@ class ClassesAnalyzer:
 
     def visitClassDeclaration(self, ctx: CompiscriptParser.ClassDeclarationContext):
         name = ctx.Identifier(0).getText()
-        log_semantic(f"[class] definición: {name}")
+        base = ctx.Identifier(1).getText() if len(ctx.Identifier()) > 1 else None
+        log_semantic(f"[class] definición: {name}" + (f" : {base}" if base else ""))
+
+        # Registrar en ClassHandler (no valida existencia de base aquí)
+        self.v.class_handler.ensure_class(name, base)
 
         self.v.class_stack.append(name)
         self.v.scopeManager.enterScope()
@@ -20,6 +24,7 @@ class ClassesAnalyzer:
             if mem.functionDeclaration():
                 self._visitMethodDeclaration(mem.functionDeclaration(), current_class=name)
             else:
+                # variable/const -> StatementsAnalyzer (que registrará atributo)
                 self.v.visit(mem)
 
         size = self.v.scopeManager.exitScope()
@@ -31,7 +36,7 @@ class ClassesAnalyzer:
         method_name = ctx_fn.Identifier().getText()
         qname = f"{current_class}.{method_name}"
 
-        # 1) params explícitos + 'this' inyectado (al inicio)
+        # 1) params explícitos + 'this'
         param_types = [ClassType(current_class)]
         param_names = ["this"]
 
@@ -58,7 +63,7 @@ class ClassesAnalyzer:
             validate_known_types(rtype, self.v.known_classes, ctx_fn,
                                  f"retorno de método '{qname}'", self.v.errors)
 
-        # 3) registrar símbolo y en registry (FIX: después de rtype)
+        # 3) registrar símbolo y en registry
         try:
             fsym = self.v.scopeManager.addSymbol(
                 qname,
@@ -79,7 +84,7 @@ class ClassesAnalyzer:
             self.v._append_err(SemanticError(str(e), line=ctx_fn.start.line, column=ctx_fn.start.column))
             return self.v.visit(ctx_fn.block())
 
-        # 4) scope de método + params (incluye 'this')
+        # 4) scope de método + params
         self.v.scopeManager.enterScope()
         self.v.in_method = True
         for pname, ptype in zip(param_names, param_types):

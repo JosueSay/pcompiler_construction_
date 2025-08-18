@@ -5,6 +5,7 @@ from logs.logger_semantic import log_semantic
 from semantic.scope_manager import ScopeManager
 from semantic.diagnostics import Diagnostics
 from semantic.registry.method_registry import MethodRegistry
+from semantic.class_handler import ClassHandler
 
 # Analyzers
 from semantic.analyzers.lvalues import LValuesAnalyzer
@@ -15,12 +16,15 @@ from semantic.analyzers.classes import ClassesAnalyzer
 from semantic.analyzers.returns import ReturnsAnalyzer
 from semantic.analyzers.controlFlow import ControlFlowAnalyzer
 
+from semantic.errors import SemanticError
+
 class VisitorCPS(CompiscriptVisitor):
     def __init__(self):
         self.errors = []
         self.diag = Diagnostics()
         self.scopeManager = ScopeManager()
         self.method_registry = MethodRegistry()
+        self.class_handler = ClassHandler()
 
         self.known_classes = set()
         self.class_stack = []
@@ -44,18 +48,35 @@ class VisitorCPS(CompiscriptVisitor):
         return self.diag.extend(err)
 
     def visitProgram(self, ctx: CompiscriptParser.ProgramContext):
+        # --- Pre-scan: registrar nombres de clases (y base, si existe) ---
         for st in ctx.statement():
             cd = st.classDeclaration() if hasattr(st, "classDeclaration") else None
             if cd:
-                name = cd.Identifier(0).getText()
-                if name in self.known_classes:
+                # Primer Identifier: nombre de clase
+                cname = cd.Identifier(0).getText()
+                # Segundo Identifier (si hay): base
+                base = cd.Identifier(1).getText() if len(cd.Identifier()) > 1 else None
+
+                if cname in self.known_classes:
                     self._append_err(SemanticError(
-                        f"Clase '{name}' ya declarada.",
+                        f"Clase '{cname}' ya declarada.",
                         line=cd.start.line, column=cd.start.column))
                 else:
-                    self.known_classes.add(name)
-                    log_semantic(f"[class] (pre-scan) declarada: {name}")
+                    self.known_classes.add(cname)
+                    # Registrar también en el ClassHandler (base simbólica si viene)
+                    self.class_handler.ensure_class(cname, base)
+                    if base:
+                        log_semantic(f"[class] (pre-scan) declarada: {cname} : {base}")
+                    else:
+                        log_semantic(f"[class] (pre-scan) declarada: {cname}")
 
+                # Validación simple de base (si se desea aquí):
+                if base and base not in self.known_classes:
+                    self._append_err(SemanticError(
+                        f"Clase base '{base}' no declarada para '{cname}'.",
+                        line=cd.start.line, column=cd.start.column))
+
+        # --- Recorrido normal ---
         for stmt in ctx.statement():
             self.visit(stmt)
 
@@ -129,5 +150,3 @@ class VisitorCPS(CompiscriptVisitor):
     def visitLeftHandSide(self, ctx):        return self.exprs.visitLeftHandSide(ctx)
 
     def visitExprNoAssign(self, ctx):        return self.visitChildren(ctx)
-
-from semantic.errors import SemanticError

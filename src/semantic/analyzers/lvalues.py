@@ -64,38 +64,51 @@ class LValuesAnalyzer:
                 t = t.return_type if ok else ErrorType()
                 continue
 
-            # PropertyAccessExpr
+            # PropertyAccessExpr  =>  atributos y métodos
             if isinstance(suf, CompiscriptParser.PropertyAccessExprContext):
                 prop_name = suf.Identifier().getText()
-                if isinstance(t, ClassType):
-                    qname = f"{t.name}.{prop_name}"
 
-                    mt = self.v.method_registry.lookup(qname)
-                    if mt is not None:
-                        param_types, rtype = mt
-                        ret_t = rtype if rtype is not None else VoidType()
-                        ftype = FunctionType(param_types[1:], ret_t)
-                        try: setattr(ftype, "_bound_receiver", t.name)
-                        except Exception: pass
-                        t = ftype
-                        continue
-
-                    sym = self.v.scopeManager.lookup(qname)
-                    if sym is not None and sym.category == SymbolCategory.FUNCTION:
-                        ret_t = sym.return_type if sym.return_type is not None else VoidType()
-                        ftype = FunctionType(sym.param_types[1:], ret_t)
-                        try: setattr(ftype, "_bound_receiver", t.name)
-                        except Exception: pass
-                        t = ftype
-                        continue
-
+                if not isinstance(t, ClassType):
                     self.v._append_err(SemanticError(
-                        f"Miembro '{prop_name}' no declarado en clase '{t.name}'.",
+                        f"Acceso a propiedades en tipo no-objeto '{t}'.",
                         line=ctx.start.line, column=ctx.start.column))
                     t = ErrorType(); continue
 
+                class_name = t.name
+
+                # 1) ¿Atributo? (con lookup en herencia)
+                attr_t = self.v.class_handler.get_attribute_type(class_name, prop_name)
+                if attr_t is not None:
+                    # Acceso a campo -> el tipo del LHS pasa a ser el tipo del atributo
+                    t = attr_t
+                    continue
+
+                # 2) ¿Método? (MethodRegistry o símbolo 'Clase.metodo')
+                qname = f"{class_name}.{prop_name}"
+
+                mt = self.v.method_registry.lookup(qname)
+                if mt is not None:
+                    param_types, rtype = mt
+                    ret_t = rtype if rtype is not None else VoidType()
+                    # ‘this’ ya vendrá ligado, por eso exponemos la firma sin el primer parámetro
+                    ftype = FunctionType(param_types[1:], ret_t)
+                    try: setattr(ftype, "_bound_receiver", class_name)
+                    except Exception: pass
+                    t = ftype
+                    continue
+
+                sym = self.v.scopeManager.lookup(qname)
+                if sym is not None and sym.category == SymbolCategory.FUNCTION:
+                    ret_t = sym.return_type if sym.return_type is not None else VoidType()
+                    ftype = FunctionType(sym.param_types[1:], ret_t)
+                    try: setattr(ftype, "_bound_receiver", class_name)
+                    except Exception: pass
+                    t = ftype
+                    continue
+
+                # 3) Nada: error
                 self.v._append_err(SemanticError(
-                    "Acceso a propiedades (obj.prop) aún no soportado en esta fase.",
+                    f"Miembro '{prop_name}' no declarado en clase '{class_name}'.",
                     line=ctx.start.line, column=ctx.start.column))
                 t = ErrorType(); continue
 

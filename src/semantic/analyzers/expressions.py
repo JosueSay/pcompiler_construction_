@@ -228,20 +228,55 @@ class ExpressionsAnalyzer:
 
     def visitNewExpr(self, ctx):
         class_name = ctx.Identifier().getText()
-        if class_name not in self.v.known_classes:
+
+        # FIX: usar exists(), no has_class()
+        if not self.v.class_handler.exists(class_name):
             self.v._append_err(SemanticError(
                 f"Clase '{class_name}' no declarada.",
                 line=ctx.start.line, column=ctx.start.column))
+            return ErrorType()
+
+        # Chequear firma de constructor: ClassName.constructor
+        ctor_sig = self.v.method_registry.lookup(f"{class_name}.constructor")
+        arg_types = []
+        if ctx.arguments():
+            for e in ctx.arguments().expression():
+                arg_types.append(self.v.visit(e))
+
+        if ctor_sig is None:
+            # no hay constructor declarado → debe llamarse sin args
+            if len(arg_types) != 0:
+                self.v._append_err(SemanticError(
+                    f"Constructor de '{class_name}' no declarado; se esperaban 0 argumentos.",
+                    line=ctx.start.line, column=ctx.start.column))
+        else:
+            param_types, rtype = ctor_sig
+            # param_types incluye 'this' como primer parámetro
+            expected = len(param_types) - 1
+            if len(arg_types) != expected:
+                self.v._append_err(SemanticError(
+                    f"Número de argumentos inválido para '{class_name}.constructor': "
+                    f"esperados {expected}, recibidos {len(arg_types)}.",
+                    line=ctx.start.line, column=ctx.start.column))
+            else:
+                from semantic.type_system import isAssignable
+                for i, (pt, at) in enumerate(zip(param_types[1:], arg_types), start=1):
+                    if not isAssignable(pt, at):
+                        self.v._append_err(SemanticError(
+                            f"Argumento #{i} incompatible en constructor de '{class_name}': "
+                            f"no se puede asignar {at} a {pt}.",
+                            line=ctx.start.line, column=ctx.start.column))
+                # rtype del constructor se ignora
+
         return ClassType(class_name)
 
     def visitPropertyAccessExpr(self, ctx):
         """
         expression '.' Identifier
-        Verifica acceso a propiedad en clases.
+        Verifica acceso a propiedad en clases (con herencia).
         """
         obj_type = self.v.visit(ctx.expression())
 
-        # Si el objeto no es clase -> error
         from semantic.custom_types import ClassType
         if not isinstance(obj_type, ClassType):
             self.v._append_err(SemanticError(
@@ -251,23 +286,16 @@ class ExpressionsAnalyzer:
 
         class_name = obj_type.name
         prop_name = ctx.Identifier().getText()
-
-        # Buscar clase registrada
-        class_type = self.v.class_handler.lookup_class(class_name)
-        if class_type is None:
-            self.v._append_err(SemanticError(
-                f"Clase '{class_name}' no declarada.",
-                line=ctx.start.line, column=ctx.start.column))
-            return ErrorType()
-
-        # Buscar atributo dentro de la clase
-        if prop_name not in class_type.attributes:
+        
+        # --- Atributo (con herencia)
+        prop_t = self.v.class_handler.get_attribute_type(class_name, prop_name)
+        if prop_t is None:
             self.v._append_err(SemanticError(
                 f"Clase '{class_name}' no tiene propiedad '{prop_name}'.",
                 line=ctx.start.line, column=ctx.start.column))
             return ErrorType()
 
-        return class_type.attributes[prop_name]
+        return prop_t
 
     def visitLeftHandSide(self, ctx):
         return self.lvalues.visitLeftHandSide(ctx)
