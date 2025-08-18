@@ -28,6 +28,7 @@ class VisitorCPS(CompiscriptVisitor):
         self.class_stack = []
         self.in_method = False
         self.fn_stack = []
+        self.fn_ctx_stack = []
 
         # submódulos
         self.lvals = LValuesAnalyzer(self)
@@ -48,7 +49,7 @@ class VisitorCPS(CompiscriptVisitor):
     # Programa
     # -------------------------
     def visitProgram(self, ctx: CompiscriptParser.ProgramContext):
-        # Pre-scan de clases
+        # Pre-scan de clases (para referencias adelantadas)
         for st in ctx.statement():
             cd = st.classDeclaration() if hasattr(st, "classDeclaration") else None
             if cd:
@@ -61,7 +62,7 @@ class VisitorCPS(CompiscriptVisitor):
                     self.known_classes.add(name)
                     log_semantic(f"[class] (pre-scan) declarada: {name}")
 
-        # Visita normal
+        # Visita normal (una sola vez)
         for stmt in ctx.statement():
             self.visit(stmt)
 
@@ -84,7 +85,10 @@ class VisitorCPS(CompiscriptVisitor):
                 f" - {sym.name}: {sym.type} ({sym.category}), "
                 f"tamaño={sym.width}, offset={sym.offset}{storage_info}{init_info}"
             )
+        return None  # ← importante: no llames a super()
 
+
+    
     # -------------------------
     # Delegaciones (STATEMENTS)
     # -------------------------
