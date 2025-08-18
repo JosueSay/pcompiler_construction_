@@ -17,7 +17,7 @@ from semantic.type_system import (
     resultUnaryNot,
 )
 from logs.logger_semantic import log_semantic
-from semantic.custom_types import NullType, ErrorType, ClassType, ArrayType, IntegerType, BoolType, StringType, FloatType
+from semantic.custom_types import NullType, ErrorType, ClassType, ArrayType, IntegerType, BoolType, StringType, FloatType, VoidType
 class VisitorCPS(CompiscriptVisitor):
     """
     Visitor semántico principal. Recorre el AST y valida:
@@ -90,6 +90,62 @@ class VisitorCPS(CompiscriptVisitor):
         """
         return self.visit(ctx.expression())
 
+    def visitForeachStatement(self, ctx: CompiscriptParser.ForeachStatementContext):
+        """
+        foreach '(' Identifier 'in' expression ')' block;
+
+        Reglas de tipado:
+        - La expresión a la derecha de 'in' debe ser ArrayType(T).
+        - El identificador del foreach se declara en un nuevo scope con tipo T.
+        - El identificador queda accesible solo dentro del block del foreach.
+        """
+        iter_name = ctx.Identifier().getText()
+        iter_expr_type = self.visit(ctx.expression())
+
+        # Determinar el tipo del elemento del arreglo
+        if isinstance(iter_expr_type, ArrayType):
+            elem_type = iter_expr_type.elem_type
+        else:
+            # Si ya hubo error en la expresión, no dupliquemos; si no, reportar que no es arreglo.
+            if not isinstance(iter_expr_type, ErrorType):
+                err = SemanticError(
+                    f"foreach requiere un arreglo; se encontró {iter_expr_type}.",
+                    line=ctx.start.line,
+                    column=ctx.start.column
+                )
+                self.errors.append(err)
+                log_semantic(f"ERROR: {err}")
+            # Continuar con ErrorType para evitar cascada
+            elem_type = ErrorType()
+
+        # Nuevo scope para el foreach (el iterador vive solo dentro del bloque)
+        self.scopeManager.enterScope()
+        try:
+            sym = self.scopeManager.addSymbol(
+                iter_name,
+                elem_type,
+                category=SymbolCategory.VARIABLE,
+                initialized=True,
+                init_value_type=elem_type,
+                init_note="foreach-var"
+            )
+            log_semantic(
+                f"Foreach var '{iter_name}' declarada con tipo: {elem_type}, tamaño: {sym.width} bytes (note=foreach-var)"
+            )
+        except Exception as e:
+            # Redeclaración en el mismo scope (poco probable porque acabamos de abrir uno),
+            # pero por consistencia lo manejamos.
+            err = SemanticError(str(e), line=ctx.start.line, column=ctx.start.column)
+            self.errors.append(err)
+            log_semantic(f"ERROR: {err}")
+
+        # Visitar el cuerpo del foreach
+        self.visit(ctx.block())
+
+        size = self.scopeManager.exitScope()
+        log_semantic(f"[scope] foreach cerrado; frame_size={size} bytes")
+        return None
+
     def visitVariableDeclaration(self, ctx: CompiscriptParser.VariableDeclarationContext):
         """
         Reglas:
@@ -116,6 +172,16 @@ class VisitorCPS(CompiscriptVisitor):
             return
 
         declared_type = resolveAnnotatedType(ann)
+        
+        if isinstance(declared_type, VoidType):
+            err = SemanticError(
+                f"La variable '{name}' no puede ser de tipo void.",
+                line=ctx.start.line, column=ctx.start.column
+            )
+            self.errors.append(err)
+            log_semantic(f"ERROR: {err}")
+            return
+        
         self._validate_known_types(declared_type, ctx, f"variable '{name}'")
 
         if declared_type is None:
@@ -210,6 +276,17 @@ class VisitorCPS(CompiscriptVisitor):
             return
 
         declared_type = resolveAnnotatedType(ann)
+        
+        if isinstance(declared_type, VoidType):
+            err = SemanticError(
+                f"La constante '{name}' no puede ser de tipo void.",
+                line=ctx.start.line, column=ctx.start.column
+            )
+            self.errors.append(err)
+            log_semantic(f"ERROR: {err}")
+            return
+
+        
         self._validate_known_types(declared_type, ctx, f"constante '{name}'")
         
         if declared_type is None:
@@ -310,7 +387,7 @@ class VisitorCPS(CompiscriptVisitor):
                 log_semantic(f"ERROR: {err}")
                 return
 
-            rhs_type = self.visit(ctx.expression())
+            rhs_type = self.visit(ctx.expression(0))
             if rhs_type is None:
                 return
 
@@ -368,6 +445,15 @@ class VisitorCPS(CompiscriptVisitor):
                     ptype = ErrorType()
                 else:
                     ptype = self._resolve_type_from_typectx(tctx)
+                    if isinstance(ptype, VoidType):
+                        err = SemanticError(
+                            f"Parámetro '{pname}' no puede ser de tipo void.",
+                            line=p.start.line, column=p.start.column
+                            )
+                        self.errors.append(err)
+                        log_semantic(f"ERROR: {err}")
+                        ptype = ErrorType()           
+                    
                     self._validate_known_types(ptype, p, f"parámetro '{pname}'")
                 param_names.append(pname)
                 param_types.append(ptype)
@@ -383,7 +469,7 @@ class VisitorCPS(CompiscriptVisitor):
         try:
             fsym = self.scopeManager.addSymbol(
                 name,
-                rtype if rtype is not None else NullType(),
+                rtype if rtype is not None else VoidType(),
                 category=SymbolCategory.FUNCTION,
                 initialized=True,
                 init_value_type=None,
@@ -812,6 +898,9 @@ class VisitorCPS(CompiscriptVisitor):
         base = t
         while isinstance(base, ArrayType):
             base = base.elem_type
+            
+        if isinstance(base, VoidType):
+            return
         if isinstance(base, ClassType):
             if base.name not in self.known_classes:
                 err = SemanticError(
@@ -838,8 +927,9 @@ class VisitorCPS(CompiscriptVisitor):
             t = StringType()
         elif base_txt == "boolean":
             t = BoolType()
+        elif base_txt == "void":
+            t = VoidType()
         else:
-            # Es un nombre de clase
             t = ClassType(base_txt)
 
         # Contar '[]' a partir de los hijos ('baseType', '[', ']', '[', ']', ...)

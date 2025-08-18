@@ -57,6 +57,9 @@ class ErrorType(Type):
         """
         return isinstance(other, ErrorType)
 
+class VoidType(Type):
+    """Tipo void: solo válido como tipo de retorno."""
+    pass
 
 class ClassType(Type):
     """

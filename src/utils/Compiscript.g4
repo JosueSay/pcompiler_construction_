@@ -1,49 +1,42 @@
 grammar Compiscript;
 
-// ------------------
-// Parser Rules
-// ------------------
+// ------------------ Parser Rules ------------------
 
 program: statement* EOF;
 
-statement
-  : variableDeclaration
-  | constantDeclaration
-  | assignment
-  | functionDeclaration
-  | classDeclaration
-  | expressionStatement
-  | printStatement
-  | block
-  | ifStatement
-  | whileStatement
-  | doWhileStatement
-  | forStatement
-  | foreachStatement
-  | tryCatchStatement
-  | switchStatement
-  | breakStatement
-  | continueStatement
-  | returnStatement
-  ;
+statement:
+	variableDeclaration
+	| constantDeclaration
+	| assignment
+	| functionDeclaration
+	| classDeclaration
+	| expressionStatement
+	| printStatement
+	| block
+	| ifStatement
+	| whileStatement
+	| doWhileStatement
+	| forStatement
+	| foreachStatement
+	| tryCatchStatement
+	| switchStatement
+	| breakStatement
+	| continueStatement
+	| returnStatement;
 
 block: '{' statement* '}';
 
-variableDeclaration
-  : ('let' | 'var') Identifier typeAnnotation? initializer? ';'
-  ;
+variableDeclaration: ('let' | 'var') Identifier typeAnnotation? initializer? ';';
 
-constantDeclaration
-  : 'const' Identifier typeAnnotation? '=' expression ';'
-  ;
+constantDeclaration:
+	'const' Identifier typeAnnotation? '=' expression ';';
 
 typeAnnotation: ':' type;
 initializer: '=' expression;
 
-assignment
-  : Identifier '=' expression ';'
-  | expression '.' Identifier '=' expression ';' // property assignment
-  ;
+assignment:
+	Identifier '=' expression ';'
+	| expression '.' Identifier '=' expression ';' ; // property assignment
 
 expressionStatement: expression ';';
 printStatement: 'print' '(' expression ')' ';';
@@ -51,119 +44,94 @@ printStatement: 'print' '(' expression ')' ';';
 ifStatement: 'if' '(' expression ')' block ('else' block)?;
 whileStatement: 'while' '(' expression ')' block;
 doWhileStatement: 'do' block 'while' '(' expression ')' ';';
-forStatement: 'for' '(' (variableDeclaration | assignment | ';') expression? ';' expression? ')' block;
-foreachStatement: 'foreach' '(' Identifier 'in' expression ')' block;
+forStatement:
+	'for' '(' (variableDeclaration | assignment | ';') expression? ';' expression? ')' block;
+foreachStatement:
+	'foreach' '(' Identifier 'in' expression ')' block;
 breakStatement: 'break' ';';
 continueStatement: 'continue' ';';
 returnStatement: 'return' expression? ';';
 
 tryCatchStatement: 'try' block 'catch' '(' Identifier ')' block;
 
-switchStatement: 'switch' '(' expression ')' '{' switchCase* defaultCase? '}';
+switchStatement:
+	'switch' '(' expression ')' '{' switchCase* defaultCase? '}';
 switchCase: 'case' expression ':' statement*;
 defaultCase: 'default' ':' statement*;
 
-functionDeclaration: 'function' Identifier '(' parameters? ')' (':' type)? block;
+functionDeclaration:
+	'function' Identifier '(' parameters? ')' (':' type)? block;
 parameters: parameter (',' parameter)*;
 parameter: Identifier (':' type)?;
 
-classDeclaration: 'class' Identifier (':' Identifier)? '{' classMember* '}';
-classMember: functionDeclaration | variableDeclaration | constantDeclaration;
+classDeclaration:
+	'class' Identifier (':' Identifier)? '{' classMember* '}';
+classMember:
+	functionDeclaration
+	| variableDeclaration
+	| constantDeclaration;
 
-// ------------------
-// Expression Rules — Operator Precedence
-// ------------------
+// ------------------ Expression Rules — Operator Precedence ------------------
 
 expression: assignmentExpr;
 
-assignmentExpr
-  : lhs=leftHandSide '=' assignmentExpr            # AssignExpr
-  | lhs=leftHandSide '.' Identifier '=' assignmentExpr # PropertyAssignExpr
-  | conditionalExpr                                # ExprNoAssign
-  ;
+assignmentExpr:
+	lhs = leftHandSide '=' assignmentExpr					# AssignExpr
+	| lhs = leftHandSide '.' Identifier '=' assignmentExpr	# PropertyAssignExpr
+	| conditionalExpr										# ExprNoAssign;
 
-conditionalExpr
-  : logicalOrExpr ('?' expression ':' expression)? # TernaryExpr
-  ;
+conditionalExpr:
+	logicalOrExpr ('?' expression ':' expression)? # TernaryExpr;
 
-logicalOrExpr
-  : logicalAndExpr ( '||' logicalAndExpr )*
-  ;
+logicalOrExpr: logicalAndExpr ( '||' logicalAndExpr)*;
 
-logicalAndExpr
-  : equalityExpr ( '&&' equalityExpr )*
-  ;
+logicalAndExpr: equalityExpr ( '&&' equalityExpr)*;
 
-equalityExpr
-  : relationalExpr ( ('==' | '!=') relationalExpr )*
-  ;
+equalityExpr: relationalExpr ( ('==' | '!=') relationalExpr)*;
 
-relationalExpr
-  : additiveExpr ( ('<' | '<=' | '>' | '>=') additiveExpr )*
-  ;
+relationalExpr:
+	additiveExpr (('<' | '<=' | '>' | '>=') additiveExpr)*;
 
-additiveExpr
-  : multiplicativeExpr ( ('+' | '-') multiplicativeExpr )*
-  ;
+additiveExpr:
+	multiplicativeExpr (('+' | '-') multiplicativeExpr)*;
 
-multiplicativeExpr
-  : unaryExpr ( ('*' | '/' | '%') unaryExpr )*
-  ;
+multiplicativeExpr: unaryExpr ( ('*' | '/' | '%') unaryExpr)*;
 
-unaryExpr
-  : ('-' | '!') unaryExpr
-  | primaryExpr
-  ;
+unaryExpr: ('-' | '!') unaryExpr | primaryExpr;
 
-primaryExpr
-  : literalExpr
-  | leftHandSide
-  | '(' expression ')'
-  ;
+primaryExpr: literalExpr | leftHandSide | '(' expression ')';
 
-literalExpr
-  : Literal
-  | arrayLiteral
-  | 'null'
-  | 'true'
-  | 'false'
-  ;
+literalExpr: Literal | arrayLiteral | 'null' | 'true' | 'false';
 
-leftHandSide
-  : primaryAtom (suffixOp)*
-  ;
+leftHandSide: primaryAtom (suffixOp)*;
 
-primaryAtom
-  : Identifier                                 # IdentifierExpr
-  | 'new' Identifier '(' arguments? ')'        # NewExpr
-  | 'this'                                     # ThisExpr
-  ;
+primaryAtom:
+	Identifier								# IdentifierExpr
+	| 'new' Identifier '(' arguments? ')'	# NewExpr
+	| 'this'								# ThisExpr;
 
-suffixOp
-  : '(' arguments? ')'                        # CallExpr
-  | '[' expression ']'                        # IndexExpr
-  | '.' Identifier                            # PropertyAccessExpr
-  ;
+suffixOp:
+	'(' arguments? ')'		# CallExpr
+	| '[' expression ']'	# IndexExpr
+	| '.' Identifier		# PropertyAccessExpr;
 
 arguments: expression (',' expression)*;
 
 arrayLiteral: '[' (expression (',' expression)*)? ']';
 
-// ------------------
-// Types
-// ------------------
+// ------------------ Types ------------------
 
 type: baseType ('[' ']')*;
-baseType: 'boolean' | 'integer' | 'string' | Identifier;
+baseType:
+	'boolean'
+	| 'integer'
+	| 'string'
+	| 'void'
+	| Identifier;
 
-// ------------------
-// Lexer Rules
-// ------------------
+// ------------------ Lexer Rules ------------------
 
-Literal
-  : IntegerLiteral
-  | StringLiteral
-  ;
+Literal: IntegerLiteral | StringLiteral;
 
 IntegerLiteral: [0-9]+;
 StringLiteral: '"' (~["\r\n])* '"';

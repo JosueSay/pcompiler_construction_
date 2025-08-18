@@ -7,6 +7,7 @@ from semantic.custom_types import (
     ErrorType,
     ClassType,
     ArrayType,
+    VoidType,
 )
 
 # --------------------------------------
@@ -20,6 +21,7 @@ TYPE_SIZES = {
     ClassType: 8,
     ArrayType: 8,
     NullType: 0,     # sin espacio propio
+    VoidType: 0,
 }
 
 
@@ -218,6 +220,8 @@ def resolveAnnotatedType(typeAnnotationCtx):
         base = StringType()
     elif base_txt == "float":
         base = FloatType()
+    elif base_txt == "void":
+        base = VoidType()
     else:
         # Si no es builtin, lo tratamos como nombre de clase (Identifier)
         # No validamos aquí existencia; eso lo hace el visitor (cuando vea usos).
