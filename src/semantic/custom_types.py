@@ -87,6 +87,23 @@ class ArrayType(Type):
 
     def __str__(self):
         return f"{self.elem_type}[]"
+    
+class ClassType:
+    def __init__(self, name, parent=None):
+        self.name = name
+        self.parent = parent 
+        self.members = {}
+
+    def __str__(self):
+        return f"class {self.name}"
+
+class StructType:
+    def __init__(self, name):
+        self.name = name
+        self.members = {}
+
+    def __str__(self):
+        return f"struct {self.name}"
 
 class FunctionType(Type):
     def __init__(self, param_types, return_type):
