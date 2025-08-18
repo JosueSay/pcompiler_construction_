@@ -1,5 +1,6 @@
 from semantic.custom_types import VoidType
 from semantic.errors import SemanticError
+from semantic.type_system import isAssignable
 
 class ReturnsAnalyzer:
     def __init__(self, v):
@@ -29,7 +30,6 @@ class ReturnsAnalyzer:
             return None
 
         value_t = self.v.visit(ctx.expression())
-        from semantic.type_system import isAssignable
         if not isAssignable(expected, value_t):
             self.v._append_err(SemanticError(
                 f"Tipo de retorno incompatible: no se puede asignar {value_t} a {expected}.",

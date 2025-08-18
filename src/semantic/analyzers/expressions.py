@@ -1,8 +1,6 @@
+from semantic.symbol_kinds import SymbolCategory
 from semantic.validators.literal import validateLiteral
-from semantic.custom_types import (
-    ErrorType, ArrayType, IntegerType, BoolType, FloatType, StringType,
-    ClassType, VoidType
-)
+from semantic.custom_types import ArrayType, ClassType, IntegerType, StringType, BoolType, FloatType, VoidType, NullType, ErrorType, FunctionType
 from semantic.type_system import (
     resultArithmetic, resultModulo, resultRelational,
     resultEquality, resultLogical, resultUnaryMinus, resultUnaryNot
@@ -24,20 +22,34 @@ class ExpressionsAnalyzer:
         return validateLiteral(value, self.v.errors, ctx)
 
     def visitIdentifierExpr(self, ctx):
-        name = ctx.getText()
-        log_semantic(f"Identifier used: {name}")
-        sym = self.v.scopeManager.lookup(name)
-        if sym is None:
-            self.v._append_err(SemanticError(
-                f"Identificador '{name}' no está declarado.",
-                line=ctx.start.line, column=ctx.start.column))
-            return ErrorType()  # FIX: no retornar None
-        from semantic.custom_types import FunctionType
-        from semantic.symbol_kinds import SymbolCategory
-        if sym.category == SymbolCategory.FUNCTION:
-            rtype = sym.return_type if sym.return_type is not None else VoidType()
-            return FunctionType(sym.param_types, rtype)
-        return sym.type
+            name = ctx.getText()
+            log_semantic(f"Identifier used: {name}")
+            sym = self.v.scopeManager.lookup(name)
+            if sym is None:
+                self.v._append_err(SemanticError(
+                    f"Identificador '{name}' no está declarado.",
+                    line=ctx.start.line, column=ctx.start.column))
+                return ErrorType()
+            
+            if sym.category == SymbolCategory.FUNCTION:
+                rtype = sym.return_type if sym.return_type is not None else VoidType()
+                return FunctionType(sym.param_types, rtype)
+
+            # 🔹 Detección de captura: si estamos dentro de una función, y el símbolo
+            # pertenece a un scope externo (scope_id más bajo) => capturado.
+            if self.v.fn_ctx_stack:
+                curr_fn_ctx = self.v.fn_ctx_stack[-1]
+                curr_fn_scope_id = curr_fn_ctx["scope_id"]
+                # Se capturan variables, parámetros y constantes (no funciones)
+                if sym.scope_id < curr_fn_scope_id:
+                    # Guardar (name, type_str, scope_id_original)
+                    try:
+                        tstr = str(sym.type)
+                    except Exception:
+                        tstr = "<type>"
+                    curr_fn_ctx["captures"].add((sym.name, tstr, sym.scope_id))
+
+            return sym.type
 
     def visitArrayLiteral(self, ctx):
         expr_ctxs = list(ctx.expression())
@@ -54,7 +66,6 @@ class ExpressionsAnalyzer:
             return ErrorType()
         def same(a, b):
             # arrays
-            from semantic.custom_types import ArrayType, ClassType, IntegerType, StringType, BoolType, FloatType, VoidType, NullType, ErrorType
             if isinstance(a, ArrayType) and isinstance(b, ArrayType):
                 return same(a.elem_type, b.elem_type)
             if isinstance(a, ClassType) and isinstance(b, ClassType):

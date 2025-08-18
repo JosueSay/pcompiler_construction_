@@ -2,6 +2,7 @@ from antlr_gen.CompiscriptParser import CompiscriptParser
 from semantic.custom_types import VoidType, ErrorType
 from semantic.symbol_kinds import SymbolCategory
 from semantic.registry.type_resolver import resolve_typectx, validate_known_types
+from semantic.registry.closure_model import CaptureInfo
 from semantic.errors import SemanticError
 from logs.logger_semantic import log_semantic
 
@@ -41,6 +42,7 @@ class FunctionsAnalyzer:
             validate_known_types(rtype, self.v.known_classes, ctx,
                                  f"retorno de función '{name}'", self.v.errors)
 
+        # Declaración del símbolo de la función en el scope actual
         try:
             fsym = self.v.scopeManager.addSymbol(
                 name,
@@ -52,12 +54,25 @@ class FunctionsAnalyzer:
             )
             fsym.param_types = param_types
             fsym.return_type = rtype
+            # Campo opcional para capturas; lo llenaremos al final
+            fsym.captures = CaptureInfo(captured=[])
             log_semantic(f"[function] declarada: {name}({', '.join(param_names)}) -> {rtype if rtype else 'void?'}")
         except Exception as e:
             self.v._append_err(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
+            # Aun si falla la declaración, visitar el bloque permite encontrar más errores
             return self.v.visit(ctx.block())
 
+        # Abrir scope de función y registrar parámetros
         self.v.scopeManager.enterScope()
+
+        # Empujar contexto de función para detección de capturas
+        curr_fn_scope_id = self.v.scopeManager.scopeId
+        self.v.fn_ctx_stack.append({
+            "scope_id": curr_fn_scope_id,
+            "captures": set(),   # (name, type_str, scope_id)
+            "symbol": fsym
+        })
+
         for pname, ptype in zip(param_names, param_types):
             try:
                 psym = self.v.scopeManager.addSymbol(
@@ -72,6 +87,13 @@ class FunctionsAnalyzer:
         self.v.fn_stack.append(expected_r)
         self.v.visit(ctx.block())
         self.v.fn_stack.pop()
+
+        # 🔹 Extraer capturas del contexto y pegarlas al símbolo
+        fn_ctx = self.v.fn_ctx_stack.pop()
+        cap_list = sorted(list(fn_ctx["captures"]), key=lambda x: x[0])
+        fsym.captures = CaptureInfo(captured=[(n, t, sid) for (n, t, sid) in cap_list])
+        if fsym.captures.captured:
+            log_semantic(f"[closure] {name} captura -> {fsym.captures.as_debug()}")
 
         size = self.v.scopeManager.exitScope()
         log_semantic(f"[scope] función '{name}' cerrada; frame_size={size} bytes")
