@@ -64,7 +64,7 @@ class LValuesAnalyzer:
                 t = t.return_type if ok else ErrorType()
                 continue
 
-            # PropertyAccessExpr  =>  atributos y métodos
+            # PropertyAccessExpr  =>  atributos y métodos (con lookup en herencia)
             if isinstance(suf, CompiscriptParser.PropertyAccessExprContext):
                 prop_name = suf.Identifier().getText()
 
@@ -79,34 +79,96 @@ class LValuesAnalyzer:
                 # 1) ¿Atributo? (con lookup en herencia)
                 attr_t = self.v.class_handler.get_attribute_type(class_name, prop_name)
                 if attr_t is not None:
-                    # Acceso a campo -> el tipo del LHS pasa a ser el tipo del atributo
                     t = attr_t
                     continue
 
-                # 2) ¿Método? (MethodRegistry o símbolo 'Clase.metodo')
-                qname = f"{class_name}.{prop_name}"
+                # 2) ¿Método? Buscar en esta clase y subir por la cadena de herencia
+                found = None
+                seen_m = set()
+                curr_m = class_name
+                while curr_m and curr_m not in seen_m:
+                    seen_m.add(curr_m)
 
-                mt = self.v.method_registry.lookup(qname)
+                    qname = f"{curr_m}.{prop_name}"
+                    mt = self.v.method_registry.lookup(qname)
+                    if mt is not None:
+                        found = (curr_m, mt)
+                        break
+
+                    sym = self.v.scopeManager.lookup(qname)
+                    if sym is not None and sym.category == SymbolCategory.FUNCTION:
+                        ret_t = sym.return_type if sym.return_type is not None else VoidType()
+                        ftype = FunctionType(sym.param_types[1:], ret_t)
+                        try: setattr(ftype, "_bound_receiver", curr_m)
+                        except Exception: pass
+                        t = ftype
+                        found = True
+                        break
+
+                    # subir a base
+                    base_m = self.v.class_handler._classes.get(curr_m).base if hasattr(self.v.class_handler, "_classes") else None
+                    curr_m = base_m
+
+                if found:
+                    # found como (owner, (param_types, rtype)) si vino de registry
+                    if found is not True:
+                        _, (param_types, rtype) = found
+                        ret_t = rtype if rtype is not None else VoidType()
+                        ftype = FunctionType(param_types[1:], ret_t)
+                        try: setattr(ftype, "_bound_receiver", class_name)
+                        except Exception: pass
+                        t = ftype
+                    # si found == True ya se asignó 't' arriba (símbolo directo)
+                    continue
+
+                #    Exponemos la firma SIN 'this' (ya bound) como FunctionType
+                def lookup_method_in_hierarchy(cls: str, mname: str):
+                    # intenta en la clase actual
+                    qname = f"{cls}.{mname}"
+                    mt = self.v.method_registry.lookup(qname)
+                    if mt is not None:
+                        return cls, mt
+                    # sube por las bases
+                    for base in self.v.class_handler.iter_bases(cls):
+                        qname = f"{base}.{mname}"
+                        mt = self.v.method_registry.lookup(qname)
+                        if mt is not None:
+                            return base, mt
+                    return None, None
+
+                owner, mt = lookup_method_in_hierarchy(class_name, prop_name)
                 if mt is not None:
                     param_types, rtype = mt
                     ret_t = rtype if rtype is not None else VoidType()
-                    # ‘this’ ya vendrá ligado, por eso exponemos la firma sin el primer parámetro
-                    ftype = FunctionType(param_types[1:], ret_t)
-                    try: setattr(ftype, "_bound_receiver", class_name)
-                    except Exception: pass
+                    # quitar 'this' de la firma pública
+                    if len(param_types) == 0:
+                        # defensivo: un método debería tener al menos 'this'
+                        ftype = FunctionType([], ret_t)
+                    else:
+                        ftype = FunctionType(param_types[1:], ret_t)
+                    try:
+                        setattr(ftype, "_bound_receiver", class_name)
+                        setattr(ftype, "_decl_owner", owner)
+                    except Exception:
+                        pass
                     t = ftype
                     continue
 
+                # 3) Símbolo directo (raro, pero mantenemos compatibilidad)
+                qname = f"{class_name}.{prop_name}"
                 sym = self.v.scopeManager.lookup(qname)
                 if sym is not None and sym.category == SymbolCategory.FUNCTION:
                     ret_t = sym.return_type if sym.return_type is not None else VoidType()
                     ftype = FunctionType(sym.param_types[1:], ret_t)
-                    try: setattr(ftype, "_bound_receiver", class_name)
-                    except Exception: pass
+                    try:
+                        setattr(ftype, "_bound_receiver", class_name)
+                        setattr(ftype, "_decl_owner", class_name)
+                    except Exception:
+                        pass
                     t = ftype
                     continue
 
-                # 3) Nada: error
+                # 4) Nada: error
                 self.v._append_err(SemanticError(
                     f"Miembro '{prop_name}' no declarado en clase '{class_name}'.",
                     line=ctx.start.line, column=ctx.start.column))

@@ -1,4 +1,3 @@
-# src/semantic/class_handler.py
 from typing import Dict, Optional
 from semantic.custom_types import Type
 
@@ -18,6 +17,8 @@ class ClassHandler:
       - ensure_class(name, base=None)
       - add_attribute(class_name, attr_name, attr_type)
       - get_attribute_type(class_name, attr_name) -> Type|None
+      - get_base(name) -> Optional[str]
+      - iter_bases(name) -> Iterator[str]
     """
     def __init__(self):
         self._classes: Dict[str, ClassInfo] = {}
@@ -29,13 +30,28 @@ class ClassHandler:
             ci = ClassInfo(name, base)
             self._classes[name] = ci
         else:
-            # si llega base y no estaba, o cambia, la actualizamos (sin validar aquí)
             if base is not None:
                 ci.base = base
         return ci
 
     def exists(self, name: str) -> bool:
         return name in self._classes
+
+    def get_base(self, name: str) -> Optional[str]:
+        ci = self._classes.get(name)
+        return ci.base if ci else None
+
+    def iter_bases(self, name: str):
+        """
+        Itera hacia arriba por la cadena de herencia: base, base de la base, ...
+        Se detiene si detecta ciclos defensivamente.
+        """
+        seen = set()
+        curr = self.get_base(name)
+        while curr and curr not in seen:
+            yield curr
+            seen.add(curr)
+            curr = self.get_base(curr)
 
     # ---- atributos ----
     def add_attribute(self, class_name: str, attr_name: str, attr_type: Type):

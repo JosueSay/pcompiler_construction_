@@ -12,6 +12,20 @@ class ExpressionsAnalyzer:
     def __init__(self, v, lvalues):
         self.v = v
         self.lvalues = lvalues
+    
+    def visitPrimaryExpr(self, ctx):
+        # primaryExpr: literalExpr | leftHandSide | '(' expression ')'
+        # Despacha explícitamente para que ( ... ) no devuelva None.
+        if hasattr(ctx, "literalExpr") and ctx.literalExpr() is not None:
+            return self.v.visit(ctx.literalExpr())
+        if hasattr(ctx, "leftHandSide") and ctx.leftHandSide() is not None:
+            return self.v.visit(ctx.leftHandSide())
+        # Caso paréntesis
+        if ctx.getChildCount() == 3 and ctx.getChild(0).getText() == '(':
+            return self.v.visit(ctx.expression())
+        # Fallback seguro
+        return self.v.visitChildren(ctx)
+
 
     # Literales y primarios
     def visitLiteralExpr(self, ctx):
@@ -229,46 +243,62 @@ class ExpressionsAnalyzer:
     def visitNewExpr(self, ctx):
         class_name = ctx.Identifier().getText()
 
-        # FIX: usar exists(), no has_class()
+        # Verificación de clase
         if not self.v.class_handler.exists(class_name):
             self.v._append_err(SemanticError(
                 f"Clase '{class_name}' no declarada.",
                 line=ctx.start.line, column=ctx.start.column))
             return ErrorType()
 
-        # Chequear firma de constructor: ClassName.constructor
-        ctor_sig = self.v.method_registry.lookup(f"{class_name}.constructor")
+        # Recolectar tipos de argumentos
         arg_types = []
         if ctx.arguments():
             for e in ctx.arguments().expression():
                 arg_types.append(self.v.visit(e))
 
-        if ctor_sig is None:
-            # no hay constructor declarado → debe llamarse sin args
+        # Buscar firma de constructor en la clase y, si no existe,
+        # seguir subiendo por la cadena de herencia hasta encontrar uno.
+        from semantic.type_system import isAssignable
+        found_sig = None
+        seen = set()
+        curr = class_name
+        while curr and curr not in seen:
+            seen.add(curr)
+            ctor_sig = self.v.method_registry.lookup(f"{curr}.constructor")
+            if ctor_sig is not None:
+                found_sig = (curr, ctor_sig)
+                break
+            # subir a la base
+            base = self.v.class_handler._classes.get(curr).base if hasattr(self.v.class_handler, "_classes") else None
+            curr = base
+
+        if found_sig is None:
+            # No existe ningún constructor en la cadena: solo permite 0 args
             if len(arg_types) != 0:
                 self.v._append_err(SemanticError(
                     f"Constructor de '{class_name}' no declarado; se esperaban 0 argumentos.",
                     line=ctx.start.line, column=ctx.start.column))
         else:
-            param_types, rtype = ctor_sig
+            ctor_owner, (param_types, rtype) = found_sig
             # param_types incluye 'this' como primer parámetro
             expected = len(param_types) - 1
             if len(arg_types) != expected:
                 self.v._append_err(SemanticError(
-                    f"Número de argumentos inválido para '{class_name}.constructor': "
+                    f"Número de argumentos inválido para '{ctor_owner}.constructor': "
                     f"esperados {expected}, recibidos {len(arg_types)}.",
                     line=ctx.start.line, column=ctx.start.column))
             else:
-                from semantic.type_system import isAssignable
+                # chequeo de asignabilidad posicional
                 for i, (pt, at) in enumerate(zip(param_types[1:], arg_types), start=1):
                     if not isAssignable(pt, at):
                         self.v._append_err(SemanticError(
-                            f"Argumento #{i} incompatible en constructor de '{class_name}': "
+                            f"Argumento #{i} incompatible en constructor de '{ctor_owner}': "
                             f"no se puede asignar {at} a {pt}.",
                             line=ctx.start.line, column=ctx.start.column))
-                # rtype del constructor se ignora
 
         return ClassType(class_name)
+
+
 
     def visitPropertyAccessExpr(self, ctx):
         """

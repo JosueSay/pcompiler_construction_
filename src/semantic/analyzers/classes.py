@@ -4,6 +4,7 @@ from semantic.symbol_kinds import SymbolCategory
 from semantic.registry.type_resolver import resolve_typectx, validate_known_types
 from logs.logger_semantic import log_semantic
 from semantic.errors import SemanticError
+from semantic.custom_types import FunctionType, VoidType as _VoidType
 
 class ClassesAnalyzer:
     def __init__(self, v):
@@ -14,7 +15,7 @@ class ClassesAnalyzer:
         base = ctx.Identifier(1).getText() if len(ctx.Identifier()) > 1 else None
         log_semantic(f"[class] definición: {name}" + (f" : {base}" if base else ""))
 
-        # Registrar en ClassHandler (no valida existencia de base aquí)
+        # Registrar en ClassHandler (no valida existencia de base aquí; se hizo en pre-scan)
         self.v.class_handler.ensure_class(name, base)
 
         self.v.class_stack.append(name)
@@ -24,8 +25,7 @@ class ClassesAnalyzer:
             if mem.functionDeclaration():
                 self._visitMethodDeclaration(mem.functionDeclaration(), current_class=name)
             else:
-                # variable/const -> StatementsAnalyzer (que registrará atributo)
-                self.v.visit(mem)
+                self.v.visit(mem)  # variable/const → StatementsAnalyzer
 
         size = self.v.scopeManager.exitScope()
         self.v.class_stack.pop()
@@ -63,6 +63,42 @@ class ClassesAnalyzer:
             validate_known_types(rtype, self.v.known_classes, ctx_fn,
                                  f"retorno de método '{qname}'", self.v.errors)
 
+        # ---- Nuevo: validar OVERRIDE con la primera base que tenga el método ----
+        def normalize_ret(rt):
+            return rt if rt is not None else VoidType()
+
+        def signatures_equal(child_params, child_ret, base_params, base_ret):
+            """
+            Compara firmas incluyendo 'this', PERO permite que 'this' sea ClassType distinto
+            (Perro vs Animal). Exige igualdad posicional en el resto y en el retorno.
+            """
+            if len(child_params) != len(base_params):
+                return False
+            # comparar params desde 1 (ignorar 'this' nominalmente distinto)
+            for a, b in zip(child_params[1:], base_params[1:]):
+                if a != b:
+                    return False
+            return normalize_ret(child_ret) == normalize_ret(base_ret)
+
+        # buscar método en la jerarquía de bases
+        found_base = None
+        base_sig = None
+        for base in self.v.class_handler.iter_bases(current_class):
+            bq = f"{base}.{method_name}"
+            mt = self.v.method_registry.lookup(bq)
+            if mt is not None:
+                found_base = base
+                base_sig = mt  # (param_types, return_type)
+                break
+
+        if found_base is not None:
+            base_params, base_ret = base_sig
+            if not signatures_equal(param_types, rtype, base_params, base_ret):
+                self.v._append_err(SemanticError(
+                    f"Override inválido de '{method_name}' en '{current_class}'; "
+                    f"la firma no coincide con la de la clase base '{found_base}'.",
+                    line=ctx_fn.start.line, column=ctx_fn.start.column))
+
         # 3) registrar símbolo y en registry
         try:
             fsym = self.v.scopeManager.addSymbol(
@@ -76,7 +112,6 @@ class ClassesAnalyzer:
             fsym.param_types = param_types
             fsym.return_type = rtype
 
-            # registry
             self.v.method_registry.register(qname, param_types, rtype)
 
             log_semantic(f"[method] declarada: {qname}({', '.join(param_names)}) -> {rtype if rtype else 'void?'}")

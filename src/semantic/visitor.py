@@ -150,3 +150,5 @@ class VisitorCPS(CompiscriptVisitor):
     def visitLeftHandSide(self, ctx):        return self.exprs.visitLeftHandSide(ctx)
 
     def visitExprNoAssign(self, ctx):        return self.visitChildren(ctx)
+    def visitPrimaryExpr(self, ctx):         return self.exprs.visitPrimaryExpr(ctx)
+
