@@ -14,9 +14,31 @@ class LValuesAnalyzer:
         self.v = v
 
     def visitLeftHandSide(self, ctx: CompiscriptParser.LeftHandSideContext):
+        # Tipo estático del receptor (declarado)
         t = self.v.visit(ctx.primaryAtom())
 
+        # Pista opcional: tipo del literal con el que se inicializó el receptor (si aplica).
+        # Esto permite validar rangos estáticos incluso cuando el símbolo guarda sólo el tipo declarado.
+        lit_t = None
+        try:
+            # Si el primaryAtom es un identificador, intenta recuperar el init_value_type del símbolo.
+            base_txt = ctx.primaryAtom().getText()
+            # Evitamos casos como "new X()", "this", llamadas, etc.
+            if base_txt and base_txt[0].isalpha() or base_txt[0] == '_':
+                sym = self.v.scopeManager.lookup(base_txt)
+                if sym is not None and hasattr(sym, "init_value_type"):
+                    ivt = getattr(sym, "init_value_type", None)
+                    if isinstance(ivt, ArrayType):
+                        lit_t = ivt  # podría ser ArrayType anidado con _literal_len en cada nivel
+            # Si el receptor ya viene de un literal (p.ej. "[1,2,3][i]"), el ArrayType trae _literal_len
+            if lit_t is None and isinstance(t, ArrayType) and hasattr(t, "_literal_len"):
+                lit_t = t
+        except Exception:
+            pass
+
         for suf in ctx.suffixOp():
+            if isinstance(t, ErrorType):
+                continue
             # IndexExpr
             if isinstance(suf, CompiscriptParser.IndexExprContext):
                 if not isinstance(t, ArrayType):
@@ -24,13 +46,38 @@ class LValuesAnalyzer:
                         f"Indexación sobre un valor no-arreglo: {t}",
                         line=ctx.start.line, column=ctx.start.column))
                     t = ErrorType(); continue
+
                 idx_t = self.v.visit(suf.expression())
                 if not isinstance(idx_t, IntegerType):
                     self.v._append_err(SemanticError(
                         f"Índice no entero en acceso de arreglo: se encontró {idx_t}",
                         line=ctx.start.line, column=ctx.start.column))
                     t = ErrorType(); continue
+
+                # Validación ESTÁTICA de rango si:
+                #  - tenemos 'lit_t' (tipo proveniente de un literal, posiblemente anidado)
+                #  - el índice es un literal entero (admite signo)
+                if lit_t is not None and isinstance(lit_t, ArrayType):
+                    try:
+                        idx_txt = suf.expression().getText()
+                        if (idx_txt.isdigit() or (idx_txt.startswith('-') and idx_txt[1:].isdigit())) \
+                           and hasattr(lit_t, "_literal_len"):
+                            idx_val = int(idx_txt)
+                            n = int(getattr(lit_t, "_literal_len", -1))
+                            if not (0 <= idx_val < n):
+                                self.v._append_err(SemanticError(
+                                    f"Índice fuera de rango: {idx_val}; válido: 0..{n-1}",
+                                    line=ctx.start.line, column=ctx.start.column))
+                                t = ErrorType(); continue
+                    except Exception:
+                        # best-effort: si algo falla, no bloqueamos
+                        pass
+
+                # Avanzar el tipo al tipo del elemento
                 t = t.elem_type
+                # Avanzar también la pista del literal (para multidimensional)
+                if isinstance(lit_t, ArrayType):
+                    lit_t = lit_t.elem_type
                 continue
 
             # CallExpr
@@ -62,6 +109,8 @@ class LValuesAnalyzer:
                             line=ctx.start.line, column=ctx.start.column))
                         ok = False
                 t = t.return_type if ok else ErrorType()
+                # llamadas rompen la pista de literal (ya no estamos en un arreglo literal)
+                lit_t = None
                 continue
 
             # PropertyAccessExpr  =>  atributos y métodos (con lookup en herencia)
@@ -80,6 +129,8 @@ class LValuesAnalyzer:
                 attr_t = self.v.class_handler.get_attribute_type(class_name, prop_name)
                 if attr_t is not None:
                     t = attr_t
+                    # perdemos pista de literal (ya no es arreglo literal conocido)
+                    lit_t = None
                     continue
 
                 # 2) ¿Método? Buscar en esta clase y subir por la cadena de herencia
@@ -110,7 +161,6 @@ class LValuesAnalyzer:
                     curr_m = base_m
 
                 if found:
-                    # found como (owner, (param_types, rtype)) si vino de registry
                     if found is not True:
                         _, (param_types, rtype) = found
                         ret_t = rtype if rtype is not None else VoidType()
@@ -118,17 +168,16 @@ class LValuesAnalyzer:
                         try: setattr(ftype, "_bound_receiver", class_name)
                         except Exception: pass
                         t = ftype
-                    # si found == True ya se asignó 't' arriba (símbolo directo)
+                    # método encontrado -> ya no seguimos con pista de literal
+                    lit_t = None
                     continue
 
-                #    Exponemos la firma SIN 'this' (ya bound) como FunctionType
+                # Lookup auxiliar (equivalente) por jerarquía
                 def lookup_method_in_hierarchy(cls: str, mname: str):
-                    # intenta en la clase actual
                     qname = f"{cls}.{mname}"
                     mt = self.v.method_registry.lookup(qname)
                     if mt is not None:
                         return cls, mt
-                    # sube por las bases
                     for base in self.v.class_handler.iter_bases(cls):
                         qname = f"{base}.{mname}"
                         mt = self.v.method_registry.lookup(qname)
@@ -140,9 +189,7 @@ class LValuesAnalyzer:
                 if mt is not None:
                     param_types, rtype = mt
                     ret_t = rtype if rtype is not None else VoidType()
-                    # quitar 'this' de la firma pública
                     if len(param_types) == 0:
-                        # defensivo: un método debería tener al menos 'this'
                         ftype = FunctionType([], ret_t)
                     else:
                         ftype = FunctionType(param_types[1:], ret_t)
@@ -152,9 +199,10 @@ class LValuesAnalyzer:
                     except Exception:
                         pass
                     t = ftype
+                    lit_t = None
                     continue
 
-                # 3) Símbolo directo (raro, pero mantenemos compatibilidad)
+                # 3) Símbolo directo (raro)
                 qname = f"{class_name}.{prop_name}"
                 sym = self.v.scopeManager.lookup(qname)
                 if sym is not None and sym.category == SymbolCategory.FUNCTION:
@@ -166,12 +214,13 @@ class LValuesAnalyzer:
                     except Exception:
                         pass
                     t = ftype
+                    lit_t = None
                     continue
 
                 # 4) Nada: error
                 self.v._append_err(SemanticError(
                     f"Miembro '{prop_name}' no declarado en clase '{class_name}'.",
                     line=ctx.start.line, column=ctx.start.column))
-                t = ErrorType(); continue
+                t = ErrorType(); lit_t = None; continue
 
         return t

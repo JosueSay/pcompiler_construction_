@@ -91,7 +91,15 @@ class ExpressionsAnalyzer:
                 f"Elementos de arreglo con tipos inconsistentes: {[str(t) for t in elem_types]}",
                 line=ctx.start.line, column=ctx.start.column))
             return ErrorType()
-        return ArrayType(first)
+
+        arr_t = ArrayType(first)
+        # ⬇️ anotamos el largo del literal para validación estática de rangos
+        try:
+            arr_t._literal_len = len(expr_ctxs)
+        except Exception:
+            pass
+        return arr_t
+
 
     def visitThisExpr(self, ctx):
         if not self.v.in_method or not self.v.class_stack:
