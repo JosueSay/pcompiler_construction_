@@ -13,12 +13,54 @@ class StatementsAnalyzer:
         return self.v.visit(ctx.expression())
 
     def visitBlock(self, ctx):
+        """
+        Bloque con detección de 'código muerto':
+        - Si una sentencia termina el flujo (return/break/continue o if-else donde
+          ambas ramas terminan), se marca el resto como inalcanzable.
+        - Reportamos el diagnóstico pero seguimos visitando para no perder otros errores.
+        """
         self.v.scopeManager.enterScope()
+
+        terminated_in_block = False
+        terminator_reason = None
+
         for st in ctx.statement():
-            self.v.visit(st)
+            # Si ya sabemos que el flujo terminó antes de esta sentencia => dead code
+            if terminated_in_block:
+                # línea/col seguras si el nodo tiene 'start'
+                try:
+                    line = st.start.line
+                    col = st.start.column
+                except Exception:
+                    line = None
+                    col = None
+                self.v._append_err(SemanticError(
+                    f"Código inalcanzable: el flujo terminó por '{terminator_reason}' antes de esta sentencia.",
+                    line=line, column=col, error_type="DeadCode"))
+                # Aún así, visitamos para seguir chequeando tipos/errores
+                self.v.visit(st)
+                continue
+
+            # Reiniciar el flag que marcan las sentencias terminantes
+            self.v._stmt_just_terminated = None
+            self.v._stmt_just_terminator_node = None
+
+            # Visitar sentencia normalmente
+            result = self.v.visit(st)
+
+            # ¿La sentencia que acabamos de visitar terminó el flujo?
+            if self.v._stmt_just_terminated:
+                terminated_in_block = True
+                terminator_reason = self.v._stmt_just_terminated
+
         size = self.v.scopeManager.exitScope()
         log_semantic(f"[scope] bloque cerrado; frame_size={size} bytes")
-        return None
+
+        # Devolvemos un pequeño resultado para que estructuras como if/else
+        return {
+            "terminated": terminated_in_block,
+            "reason": terminator_reason
+        }
 
     def visitVariableDeclaration(self, ctx):
         name = ctx.Identifier().getText()
@@ -58,12 +100,10 @@ class StatementsAnalyzer:
                     line=ctx.start.line, column=ctx.start.column))
 
                 # ...pero si estamos en un contexto de clase, igual registra el atributo
-                # para que futuros accesos vean el miembro y puedan diagnosticar tipos.
                 if self.v.class_stack:
                     current_class = self.v.class_stack[-1]
                     self.v.class_handler.add_attribute(current_class, name, declared_type)
                     log_semantic(f"[class.attr] {current_class}.{name}: {declared_type} (registrado pese a init faltante)")
-
                 return
         else:
             rhs_type = self.v.visit(init.expression())
@@ -73,7 +113,6 @@ class StatementsAnalyzer:
                 self.v._append_err(SemanticError(
                     f"Asignación incompatible: no se puede asignar {rhs_type} a {declared_type} en '{name}'.",
                     line=ctx.start.line, column=ctx.start.column))
-                # Aun con error, si estamos dentro de clase registra el atributo para no romper accesos posteriores.
                 if self.v.class_stack:
                     current_class = self.v.class_stack[-1]
                     self.v.class_handler.add_attribute(current_class, name, declared_type)
@@ -101,7 +140,6 @@ class StatementsAnalyzer:
             current_class = self.v.class_stack[-1]
             self.v.class_handler.add_attribute(current_class, name, declared_type)
             log_semantic(f"[class.attr] {current_class}.{name}: {declared_type}")
-
 
     def visitConstantDeclaration(self, ctx):
         name = ctx.Identifier().getText() if ctx.Identifier() else "<unnamed-const>"
@@ -146,14 +184,12 @@ class StatementsAnalyzer:
         except Exception as e:
             self.v._append_err(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
 
-
     def visitAssignment(self, ctx):
         """
         Soporta:
         1) Identifier '=' expression ';'
         2) expression '.' Identifier '=' expression ';'   (asignación a propiedad)
         """
-        # ¿Cuántas expresiones tiene esta alternativa?
         exprs = list(ctx.expression())
         n = len(exprs)
 
@@ -183,17 +219,13 @@ class StatementsAnalyzer:
 
         # ---- Caso 2: asignación a propiedad obj.prop = expr ----
         if n == 2:
-            # LHS es una expression(), el nombre de la propiedad está en el token Identifier
             lhs_obj = exprs[0]
             rhs_exp = exprs[1]
 
-            # En esta alternativa hay exactamente un Identifier: el nombre de la propiedad.
             prop_tok = ctx.Identifier()
-            # En Python target, puede venir como objeto o lista; normalizamos:
             try:
                 prop_name = prop_tok.getText()
             except Exception:
-                # si fuera lista
                 prop_name = prop_tok[0].getText() if prop_tok else "<prop>"
 
             obj_t = self.v.visit(lhs_obj)
@@ -220,12 +252,10 @@ class StatementsAnalyzer:
                     line=ctx.start.line, column=ctx.start.column))
             return
 
-        # ---- Fallback: por si aparece otra forma que no contemplamos ----
+        # ---- Fallback ----
         self.v._append_err(SemanticError(
             "Asignación a propiedad (obj.prop = ...) aún no soportada en esta fase.",
             line=ctx.start.line, column=ctx.start.column))
-
-
 
     def visitForeachStatement(self, ctx):
         iter_name = ctx.Identifier().getText()
@@ -250,7 +280,9 @@ class StatementsAnalyzer:
         except Exception as e:
             self.v._append_err(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
 
+        # El cuerpo es un bloque: su terminación no implica que el foreach sentencie
+        # al bloque externo (porque el foreach por sí mismo no 'termina' el flujo).
         self.v.visit(ctx.block())
         size = self.v.scopeManager.exitScope()
         log_semantic(f"[scope] foreach cerrado; frame_size={size} bytes")
-        return None
+        return {"terminated": False, "reason": None}

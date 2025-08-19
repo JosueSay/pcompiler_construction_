@@ -23,7 +23,7 @@ class ClassHandler:
     def __init__(self):
         self._classes: Dict[str, ClassInfo] = {}
 
-    # ---- clases ----
+    # clases
     def ensure_class(self, name: str, base: Optional[str] = None):
         ci = self._classes.get(name)
         if ci is None:
@@ -53,7 +53,7 @@ class ClassHandler:
             seen.add(curr)
             curr = self.get_base(curr)
 
-    # ---- atributos ----
+    # atributos 
     def add_attribute(self, class_name: str, attr_name: str, attr_type: Type):
         ci = self.ensure_class(class_name)
         ci.attributes[attr_name] = attr_type

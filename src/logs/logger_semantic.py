@@ -17,7 +17,6 @@ VERBOSE = os.environ.get("CPS_VERBOSE", "1") not in ("0", "false", "False")
 
 def start_run(output_stem: str):
     """
-    output_stem = p.ej. '20250818-124211_switch_ok.cps'
     Prepara archivo de semantic log para esta corrida.
     """
     global _run_ts, _semantic_log_path

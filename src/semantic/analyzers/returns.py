@@ -11,7 +11,10 @@ class ReturnsAnalyzer:
             self.v._append_err(SemanticError(
                 "'return' fuera de una función.",
                 line=ctx.start.line, column=ctx.start.column))
-            return None
+            # Aun así, marca terminación del flujo local
+            self.v._stmt_just_terminated = "return"
+            self.v._stmt_just_terminator_node = ctx
+            return {"terminated": True, "reason": "return"}
 
         expected = self.v.fn_stack[-1]
         has_expr = ctx.expression() is not None
@@ -21,17 +24,26 @@ class ReturnsAnalyzer:
                 self.v._append_err(SemanticError(
                     "La función 'void' no debe retornar un valor.",
                     line=ctx.start.line, column=ctx.start.column))
-            return None
+            # En cualquier caso, return termina el flujo
+            self.v._stmt_just_terminated = "return"
+            self.v._stmt_just_terminator_node = ctx
+            return {"terminated": True, "reason": "return"}
 
         if not has_expr:
             self.v._append_err(SemanticError(
                 "Se esperaba un valor en 'return'.",
                 line=ctx.start.line, column=ctx.start.column))
-            return None
+            # Aún así, el return vacío termina el flujo
+            self.v._stmt_just_terminated = "return"
+            self.v._stmt_just_terminator_node = ctx
+            return {"terminated": True, "reason": "return"}
 
         value_t = self.v.visit(ctx.expression())
         if not isAssignable(expected, value_t):
             self.v._append_err(SemanticError(
                 f"Tipo de retorno incompatible: no se puede asignar {value_t} a {expected}.",
                 line=ctx.start.line, column=ctx.start.column))
-        return None
+        # Return siempre termina flujo
+        self.v._stmt_just_terminated = "return"
+        self.v._stmt_just_terminator_node = ctx
+        return {"terminated": True, "reason": "return"}

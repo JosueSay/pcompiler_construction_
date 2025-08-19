@@ -4,19 +4,11 @@ from semantic.errors import SemanticError
 from logs.logger_semantic import log_semantic
 
 def _as_list(x):
-    """
-    Normaliza llamadas de ANTLR que pueden devolver una lista de contexts o un solo context.
-    - None -> []
-    - [ctx, ...] -> list(ctxs)
-    - ctx -> [ctx]
-    """
     if x is None:
         return []
     try:
-        # Si ya es iterable de contexts, conviértelo a lista
         return list(x)
     except TypeError:
-        # No es iterable: asume un único contexto
         return [x]
 
 class ControlFlowAnalyzer:
@@ -25,16 +17,12 @@ class ControlFlowAnalyzer:
       - Condiciones de if/while/do-while/for/switch deben ser boolean.
       - break/continue solo dentro de bucles.
       - switch: tipos de los 'case' compatibles con el scrutinee.
-    Incluye alias para adaptarse a distintas variantes de nombres de reglas
-    sin modificar la gramática original.
+    También colabora con la detección de terminación para 'if/else'.
     """
 
     def __init__(self, v):
         self.v = v  # VisitorCPS
 
-    # -------------------------
-    # Utilidades
-    # -------------------------
     def _require_boolean(self, cond_t, ctx, who: str):
         if isinstance(cond_t, ErrorType):
             return
@@ -44,22 +32,17 @@ class ControlFlowAnalyzer:
                 line=ctx.start.line, column=ctx.start.column))
 
     def _same_type(self, a, b):
-        """
-        Igualdad estricta de tipos para switch/case.
-        (Sin subtipado/herencia; si en el futuro hay herencia se ajusta aquí.)
-        """
         if isinstance(a, ErrorType) or isinstance(b, ErrorType):
             return True  # evitar cascada
         if type(a) is type(b):
             if isinstance(a, ClassType):
                 return a.name == b.name
-            if isinstance(a, ArrayType):
+            if hasattr(a, "elem_type") and hasattr(b, "elem_type"):  # arrays
                 return self._same_type(a.elem_type, b.elem_type)
             return True
         return False
 
     def _walk(self, node):
-        """Recorrido DFS ligero para buscar nodos hijos."""
         try:
             for ch in node.getChildren():
                 yield ch
@@ -68,15 +51,7 @@ class ControlFlowAnalyzer:
             return
 
     def _collect_case_exprs(self, ctx):
-        """
-        Intenta recoger todas las expresiones que aparecen en 'case ...:'.
-        Soporta varias formas de gramática:
-          - ctx.caseBlock().caseClause().expression()
-          - o buscando nodos cuyo nombre de clase contenga 'Case' y tengan expression()
-        """
         exprs = []
-
-        # Forma más común: switch() -> caseBlock -> caseClause* -> expression*
         cb = getattr(ctx, "caseBlock", None)
         if callable(cb):
             cb = cb()
@@ -87,8 +62,6 @@ class ControlFlowAnalyzer:
                     get_exprs = getattr(c, "expression", None)
                     if callable(get_exprs):
                         exprs.extend(_as_list(get_exprs()))
-
-        # Fallback: caminar y tomar cualquier nodo 'Case*' que exponga expression()
         if not exprs:
             for n in self._walk(ctx):
                 cname = n.__class__.__name__.lower()
@@ -98,47 +71,52 @@ class ControlFlowAnalyzer:
                         exprs.extend(_as_list(get_exprs()))
         return exprs
 
-    # -------------------------
     # if
-    # -------------------------
     def visitIfStatement(self, ctx: CompiscriptParser.IfStatementContext):
         cond_t = self.v.visit(ctx.expression())
         self._require_boolean(cond_t, ctx, "if")
-        if ctx.block(0): self.v.visit(ctx.block(0))
-        if ctx.block(1): self.v.visit(ctx.block(1))
-        return None
 
-    # -------------------------
+        # Bloque then
+        then_result = {"terminated": False, "reason": None}
+        if ctx.block(0):
+            then_result = self.v.visit(ctx.block(0)) or then_result
+
+        # Bloque else (si existe)
+        else_result = {"terminated": False, "reason": None}
+        if ctx.block(1):
+            else_result = self.v.visit(ctx.block(1)) or else_result
+
+        # Un 'if' como sentencia se considera terminante SOLO si ambas ramas terminan.
+        if then_result.get("terminated") and else_result.get("terminated"):
+            self.v._stmt_just_terminated = "if-else"
+            self.v._stmt_just_terminator_node = ctx
+
+        return {"terminated": bool(self.v._stmt_just_terminated), "reason": self.v._stmt_just_terminated}
+
     # while
-    # -------------------------
     def visitWhileStatement(self, ctx: CompiscriptParser.WhileStatementContext):
         cond_t = self.v.visit(ctx.expression())
         self._require_boolean(cond_t, ctx, "while")
         self.v.loop_depth += 1
         self.v.visit(ctx.block())
         self.v.loop_depth -= 1
-        return None
+        # Un while no se considera terminante de forma estática
+        return {"terminated": False, "reason": None}
 
-    # -------------------------
     # do-while
-    # -------------------------
     def visitDoWhileStatement(self, ctx: CompiscriptParser.DoWhileStatementContext):
         self.v.loop_depth += 1
         self.v.visit(ctx.block())
         self.v.loop_depth -= 1
         cond_t = self.v.visit(ctx.expression())
         self._require_boolean(cond_t, ctx, "do-while")
-        return None
+        return {"terminated": False, "reason": None}
 
-    # -------------------------
     # for
-    # -------------------------
     def visitForStatement(self, ctx: CompiscriptParser.ForStatementContext):
-        # init
         if getattr(ctx, "forInitializer", None) and ctx.forInitializer():
             self.v.visit(ctx.forInitializer())
 
-        # cond (si se puede obtener)
         cond_expr = None
         if hasattr(ctx, "condition") and ctx.condition():
             cond_expr = ctx.condition()
@@ -150,37 +128,38 @@ class ControlFlowAnalyzer:
             cond_t = self.v.visit(cond_expr)
             self._require_boolean(cond_t, ctx, "for")
 
-        # update
         if getattr(ctx, "forUpdate", None) and ctx.forUpdate():
             self.v.visit(ctx.forUpdate())
 
         self.v.loop_depth += 1
         self.v.visit(ctx.block())
         self.v.loop_depth -= 1
-        return None
+        return {"terminated": False, "reason": None}
 
-    # -------------------------
     # break / continue
-    # -------------------------
     def visitBreakStatement(self, ctx: CompiscriptParser.BreakStatementContext):
         if self.v.loop_depth <= 0:
             self.v._append_err(SemanticError(
                 "'break' fuera de un bucle.",
                 line=ctx.start.line, column=ctx.start.column))
-        return None
+        # Marca que esta sentencia termina el flujo normal del bloque actual
+        self.v._stmt_just_terminated = "break"
+        self.v._stmt_just_terminator_node = ctx
+        return {"terminated": True, "reason": "break"}
 
     def visitContinueStatement(self, ctx: CompiscriptParser.ContinueStatementContext):
         if self.v.loop_depth <= 0:
             self.v._append_err(SemanticError(
                 "'continue' fuera de un bucle.",
                 line=ctx.start.line, column=ctx.start.column))
-        return None
+        # También termina el flujo "hacia sentencias siguientes" en el bloque actual
+        self.v._stmt_just_terminated = "continue"
+        self.v._stmt_just_terminator_node = ctx
+        return {"terminated": True, "reason": "continue"}
 
-    # -------------------------
     # switch
-    # -------------------------
     def visitSwitchStatement(self, ctx):
-        # 1) Tipo del scrutinee
+        # 1) primer tipo
         get_expr = getattr(ctx, "expression", None)
         scrutinee_ctx = None
         if callable(get_expr):
@@ -208,15 +187,15 @@ class ControlFlowAnalyzer:
         if d:
             for st in _as_list(d.statement()):
                 self.v.visit(st)
-        return None
 
+        return {"terminated": False, "reason": None}
 
-    # ------ ALIAS para distintas gramáticas ------
-    def visitSwitchStmt(self, ctx):      # alias común
+    # ------ ALIAS ------
+    def visitSwitchStmt(self, ctx):
         return self.visitSwitchStatement(ctx)
 
-    def visitSwitch(self, ctx):          # otro alias típico
+    def visitSwitch(self, ctx):
         return self.visitSwitchStatement(ctx)
 
-    def visitCaseStatement(self, ctx):   # por si el switch se modela diferente
+    def visitCaseStatement(self, ctx):
         return self.visitSwitchStatement(ctx)

@@ -33,6 +33,10 @@ class VisitorCPS(CompiscriptVisitor):
         self.fn_ctx_stack = []
         self.loop_depth = 0
 
+        # Flags internos para detección de terminación por sentencia
+        self._stmt_just_terminated = None        # "return" | "break" | "continue" | "if-else" | None
+        self._stmt_just_terminator_node = None   # nodo ANTLR de la sentencia terminante (opcional)
+
         self.lvals = LValuesAnalyzer(self)
         self.exprs = ExpressionsAnalyzer(self, self.lvals)
         self.stmts = StatementsAnalyzer(self)
@@ -52,9 +56,7 @@ class VisitorCPS(CompiscriptVisitor):
         for st in ctx.statement():
             cd = st.classDeclaration() if hasattr(st, "classDeclaration") else None
             if cd:
-                # Primer Identifier: nombre de clase
                 cname = cd.Identifier(0).getText()
-                # Segundo Identifier (si hay): base
                 base = cd.Identifier(1).getText() if len(cd.Identifier()) > 1 else None
 
                 if cname in self.known_classes:
@@ -63,14 +65,12 @@ class VisitorCPS(CompiscriptVisitor):
                         line=cd.start.line, column=cd.start.column))
                 else:
                     self.known_classes.add(cname)
-                    # Registrar también en el ClassHandler (base simbólica si viene)
                     self.class_handler.ensure_class(cname, base)
                     if base:
                         log_semantic(f"[class] (pre-scan) declarada: {cname} : {base}")
                     else:
                         log_semantic(f"[class] (pre-scan) declarada: {cname}")
 
-                # Validación simple de base (si se desea aquí):
                 if base and base not in self.known_classes:
                     self._append_err(SemanticError(
                         f"Clase base '{base}' no declarada para '{cname}'.",
@@ -151,4 +151,3 @@ class VisitorCPS(CompiscriptVisitor):
 
     def visitExprNoAssign(self, ctx):        return self.visitChildren(ctx)
     def visitPrimaryExpr(self, ctx):         return self.exprs.visitPrimaryExpr(ctx)
-

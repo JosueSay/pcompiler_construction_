@@ -63,7 +63,7 @@ class ClassesAnalyzer:
             validate_known_types(rtype, self.v.known_classes, ctx_fn,
                                  f"retorno de método '{qname}'", self.v.errors)
 
-        # ---- Nuevo: validar OVERRIDE con la primera base que tenga el método ----
+        # valirar OVERRIDE con la primera base que tenga el método
         def normalize_ret(rt):
             return rt if rt is not None else VoidType()
 

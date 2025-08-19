@@ -8,7 +8,7 @@ def _safe(s):
 
 def write_symbols_log(symbols, output_stem: str):
     """
-    Escribe un .symbols.log legible y un .symbols.html (tabla bonita).
+    Escribe un .symbols.log
     """
     out_dir = current_out_dir()
     log_path = os.path.join(out_dir, f"{output_stem}.symbols.log")
@@ -77,7 +77,7 @@ tr:nth-child(even){{background:#fafafa}}
 
 def _to_tree_list(ctx):
     """
-    Devuelve una estructura árbol simple (name, text, children[])
+    Devuelve una estructura árbol simple
     """
     name = ctx.__class__.__name__.replace("Context","")
     try:
@@ -95,7 +95,7 @@ def _to_tree_list(ctx):
 
 def write_ast_text(tree, output_stem: str):
     """
-    Escribe .ast.txt como árbol indentado.
+    Escribe .ast.txt
     """
     out = []
     def dump(n, d=0):
@@ -110,7 +110,7 @@ def write_ast_text(tree, output_stem: str):
 
 def write_ast_html(tree, output_stem: str):
     """
-    Escribe .ast.html (lista colapsable).
+    Escribe .ast.html
     """
     t = _to_tree_list(tree)
 

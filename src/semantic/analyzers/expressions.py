@@ -7,6 +7,7 @@ from semantic.type_system import (
 )
 from logs.logger_semantic import log_semantic
 from semantic.errors import SemanticError
+from semantic.type_system import isAssignable
 
 class ExpressionsAnalyzer:
     def __init__(self, v, lvalues):
@@ -266,7 +267,6 @@ class ExpressionsAnalyzer:
 
         # Buscar firma de constructor en la clase y, si no existe,
         # seguir subiendo por la cadena de herencia hasta encontrar uno.
-        from semantic.type_system import isAssignable
         found_sig = None
         seen = set()
         curr = class_name
@@ -315,7 +315,6 @@ class ExpressionsAnalyzer:
         """
         obj_type = self.v.visit(ctx.expression())
 
-        from semantic.custom_types import ClassType
         if not isinstance(obj_type, ClassType):
             self.v._append_err(SemanticError(
                 f"No se puede acceder a propiedades de tipo '{obj_type}'.",
@@ -325,7 +324,7 @@ class ExpressionsAnalyzer:
         class_name = obj_type.name
         prop_name = ctx.Identifier().getText()
         
-        # --- Atributo (con herencia)
+        # Atributo con herencia
         prop_t = self.v.class_handler.get_attribute_type(class_name, prop_name)
         if prop_t is None:
             self.v._append_err(SemanticError(

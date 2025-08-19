@@ -10,9 +10,7 @@ from semantic.custom_types import (
     VoidType,
 )
 
-# --------------------------------------
 # Tamaños de tipos básicos (bytes)
-# --------------------------------------
 TYPE_SIZES = {
     IntegerType: 4,
     FloatType: 8,
@@ -34,9 +32,7 @@ def getTypeWidth(typeInstance):
             return size
     return 0
 
-# ------------------------------
 # Predicados de categorías
-# ------------------------------
 def isNumeric(t):
     return isinstance(t, (IntegerType, FloatType))
 
@@ -50,9 +46,7 @@ def isReferenceType(t):
     """
     return isinstance(t, (StringType, ClassType, ArrayType))
 
-# --------------
 # Asignabilidad 
-# --------------
 def isAssignable(target_type, value_type):
     """
     Reglas:
@@ -80,9 +74,7 @@ def isAssignable(target_type, value_type):
     # primitivos exactos
     return type(target_type) is type(value_type)
 
-# ------------------------------
 # Reglas de resultados por operación
-# ------------------------------
 def resultArithmetic(t1, t2, op):
     """
     Reglas aritméticas para +, -, *, / con un pequeño casteo implícito numérico:
@@ -93,10 +85,9 @@ def resultArithmetic(t1, t2, op):
     Regla especial de concatenación:
       - '+' entre string y string => string
 
-    NOTA: la concatenación solo aplica a '+'. Cualquier otro operador con strings es inválido.
+    la concatenación solo aplica a '+'. Cualquier otro operador con strings es inválido.
     """
     # Propagación de errores: si alguno ya es ErrorType, no cascadiemos
-    from semantic.custom_types import StringType, IntegerType, FloatType, ErrorType
 
     if isinstance(t1, ErrorType) or isinstance(t2, ErrorType):
         return ErrorType()
@@ -184,9 +175,7 @@ def resultUnaryNot(t):
     return ErrorType()
 
 
-# ------------------------------
 # Resolución de anotación de tipos
-# ------------------------------
 def resolveAnnotatedType(typeAnnotationCtx):
     """
     Convierte la anotación de tipo del parser a una instancia de tipo semántico.
@@ -224,7 +213,6 @@ def resolveAnnotatedType(typeAnnotationCtx):
         base = VoidType()
     else:
         # Si no es builtin, lo tratamos como nombre de clase (Identifier)
-        # No validamos aquí existencia; eso lo hace el visitor (cuando vea usos).
         base = ClassType(base_txt)
 
     # Enrollar arreglos si hay dims > 0

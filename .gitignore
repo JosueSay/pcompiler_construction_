@@ -216,3 +216,4 @@ antlr_gen/*
 !antlr_gen/README.md
 pendiente.md
 src/logs/out
+docs/code
