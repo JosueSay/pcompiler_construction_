@@ -86,12 +86,18 @@ class ControlFlowAnalyzer:
         if ctx.block(1):
             else_result = self.v.visit(ctx.block(1)) or else_result
 
-        # Un 'if' como sentencia se considera terminante SOLO si ambas ramas terminan.
-        if then_result.get("terminated") and else_result.get("terminated"):
+        # Un 'if' es terminante SOLO si ambas ramas terminan.
+        both_terminate = bool(then_result.get("terminated") and else_result.get("terminated"))
+        if both_terminate:
             self.v._stmt_just_terminated = "if-else"
             self.v._stmt_just_terminator_node = ctx
+            return {"terminated": True, "reason": "if-else"}
 
-        return {"terminated": bool(self.v._stmt_just_terminated), "reason": self.v._stmt_just_terminated}
+        # IMPORTANTe: limpiar cualquier terminación "interna" que no aplique al 'if' completo
+        self.v._stmt_just_terminated = None
+        self.v._stmt_just_terminator_node = None
+        return {"terminated": False, "reason": None}
+
 
     # while
     def visitWhileStatement(self, ctx: CompiscriptParser.WhileStatementContext):
