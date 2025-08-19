@@ -14,6 +14,8 @@ class Symbol:
         initialized (bool): Si fue inicializado (True) o no (False).
         init_value_type (Type|None): Tipo del valor usado para inicializar (p.ej. NullType()).
         init_note (str|None): Nota breve del origen de la inicialización (p.ej. 'explicit', 'default-null', 'missing-initializer').
+        storage (str): 'global' | 'stack' | 'param' (futuro) -> donde vive la celda del símbolo
+        is_ref (bool): si el valor almacenado es un puntero (referencia).
     """
 
     def __init__(
@@ -28,7 +30,10 @@ class Symbol:
         return_type=None,
         initialized=False,
         init_value_type=None,
-        init_note=None
+        init_note=None,
+        *,
+        storage="stack",
+        is_ref=False 
     ):
         self.name = name
         self.type = type_
@@ -38,16 +43,18 @@ class Symbol:
         self.width = width
         self.param_types = param_types or []
         self.return_type = return_type
-
-        # Nuevo: metadatos de inicialización
         self.initialized = initialized
         self.init_value_type = init_value_type
         self.init_note = init_note
+        
+        self.storage = storage       # 'global' o 'stack' -> IC
+        self.is_ref = is_ref         # true si almacena un puntero (string/objeto/array)
 
     def __repr__(self):
         base = (
             f"Symbol(name={self.name}, type={self.type}, category={self.category}, "
-            f"scope={self.scope_id}, offset={self.offset}, width={self.width}"
+            f"scope={self.scope_id}, offset={self.offset}, width={self.width}, "
+            f"storage={self.storage}, is_ref={self.is_ref}"
         )
         init_part = f", initialized={self.initialized}"
         if self.init_value_type is not None:

@@ -5,17 +5,21 @@ from semantic.custom_types import (
     BoolType,
     NullType,
     ErrorType,
+    ClassType,
+    ArrayType,
+    VoidType,
 )
 
-# --------------------------------------
 # Tamaños de tipos básicos (bytes)
-# --------------------------------------
 TYPE_SIZES = {
     IntegerType: 4,
     FloatType: 8,
     BoolType: 1,
     StringType: 8,   # tratado como puntero
+    ClassType: 8,
+    ArrayType: 8,
     NullType: 0,     # sin espacio propio
+    VoidType: 0,
 }
 
 
@@ -28,9 +32,7 @@ def getTypeWidth(typeInstance):
             return size
     return 0
 
-# ------------------------------
 # Predicados de categorías
-# ------------------------------
 def isNumeric(t):
     return isinstance(t, (IntegerType, FloatType))
 
@@ -40,34 +42,39 @@ def isBoolean(t):
 def isReferenceType(t):
     """
     Referencia == admite null.
-    Por ahora: string. Luego: ArrayType, ClassType, etc.
+    Por ahora: string, class, array.
     """
-    return isinstance(t, StringType)
-    # Ejemplo futuro:
-    # or isinstance(t, ArrayType) or isinstance(t, ClassType)
+    return isinstance(t, (StringType, ClassType, ArrayType))
 
-
-# --------------
 # Asignabilidad 
-# --------------
 def isAssignable(target_type, value_type):
     """
-    Regla de asignabilidad:
-      - Mismo tipo => OK
-      - value_type es NullType y target es referencia => OK
-      - Caso contrario => NO
+    Reglas:
+      - Propagar ErrorType para no cascada.
+      - null asignable a tipos de referencia (string, class, array).
+      - ArrayType(T1) <- ArrayType(T2)  solo si T1 <- T2 (recursivo).
+      - ClassType(A) <- ClassType(B)    solo si A == B (por ahora sin herencia).
+      - Primitivos: mismo tipo exacto.
     """
     if isinstance(value_type, ErrorType):
-        return True  # evitar efecto cascada
-    if type(target_type) is type(value_type):
-        return True
+        return True  # evitar cascada
+
+    # null -> referencia
     if isinstance(value_type, NullType) and isReferenceType(target_type):
         return True
-    return False
 
-# ------------------------------
+    # arrays: comparar elemento recursivamente
+    if isinstance(target_type, ArrayType) and isinstance(value_type, ArrayType):
+        return isAssignable(target_type.elem_type, value_type.elem_type)
+
+    # clases: mismo nombre
+    if isinstance(target_type, ClassType) and isinstance(value_type, ClassType):
+        return target_type == value_type  # usa __eq__ por nombre
+
+    # primitivos exactos
+    return type(target_type) is type(value_type)
+
 # Reglas de resultados por operación
-# ------------------------------
 def resultArithmetic(t1, t2, op):
     """
     Reglas aritméticas para +, -, *, / con un pequeño casteo implícito numérico:
@@ -78,10 +85,9 @@ def resultArithmetic(t1, t2, op):
     Regla especial de concatenación:
       - '+' entre string y string => string
 
-    NOTA: la concatenación solo aplica a '+'. Cualquier otro operador con strings es inválido.
+    la concatenación solo aplica a '+'. Cualquier otro operador con strings es inválido.
     """
     # Propagación de errores: si alguno ya es ErrorType, no cascadiemos
-    from semantic.custom_types import StringType, IntegerType, FloatType, ErrorType
 
     if isinstance(t1, ErrorType) or isinstance(t2, ErrorType):
         return ErrorType()
@@ -169,30 +175,48 @@ def resultUnaryNot(t):
     return ErrorType()
 
 
-# ------------------------------
 # Resolución de anotación de tipos
-# ------------------------------
 def resolveAnnotatedType(typeAnnotationCtx):
     """
     Convierte la anotación de tipo del parser a una instancia de tipo semántico.
 
-    Soporte actual: 'integer', 'boolean', 'string'
-    'float' no está en la gramática baseType actual, pero se deja preparado.
+    Gramática:
+      type: baseType ('[' ']')*
+      baseType: 'boolean' | 'integer' | 'string' | Identifier
+
+    Soporta arreglos anidados por conteo de '[]' en el texto,
+    y clases por nombre (Identifier) como ClassType(name).
     """
-    t = typeAnnotationCtx.type_().getText() if typeAnnotationCtx else None
-    if t is None:
+    ttxt = typeAnnotationCtx.type_().getText() if typeAnnotationCtx else None
+    if ttxt is None:
         return None
 
-    t = t.lower()
+    # Conteo de sufijos [] (array nesting)
+    dims = 0
+    while ttxt.endswith("[]"):
+        dims += 1
+        ttxt = ttxt[:-2]
 
-    if t == "integer":
-        return IntegerType()
-    if t == "boolean":
-        return BoolType()
-    if t == "string":
-        return StringType()
-    if t == "float":
-        return FloatType()  # si luego lo agregas a la gramática
+    base_txt = ttxt.strip()
 
-    # Futuro: arrays con '[]', identificadores de clase, etc.
-    return None
+    # builtins
+    base = None
+    if base_txt == "integer":
+        base = IntegerType()
+    elif base_txt == "boolean":
+        base = BoolType()
+    elif base_txt == "string":
+        base = StringType()
+    elif base_txt == "float":
+        base = FloatType()
+    elif base_txt == "void":
+        base = VoidType()
+    else:
+        # Si no es builtin, lo tratamos como nombre de clase (Identifier)
+        base = ClassType(base_txt)
+
+    # Enrollar arreglos si hay dims > 0
+    ty = base
+    for _ in range(dims):
+        ty = ArrayType(ty)
+    return ty

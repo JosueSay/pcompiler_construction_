@@ -1,5 +1,5 @@
 from semantic.symbol_table import Symbol
-from semantic.type_system import getTypeWidth
+from semantic.type_system import getTypeWidth, isReferenceType
 from semantic.symbol_kinds import SymbolCategory
 
 class ScopeManager:
@@ -22,15 +22,24 @@ class ScopeManager:
         self.offsets.append(0)
         self.scopeId += 1
         return self.scopeId
+    
+    def currentStorage(self):
+        return "global" if self.scopeId == 0 else "stack"
+
+    def frameSize(self):
+        """Bytes usados en el scope actual (útil para generación de código)."""
+        return self.offsets[-1]    
 
     def exitScope(self):
         """
-        Sale del entorno actual, eliminando su tabla de símbolos y offset.
+        Retorna el frame size del scope que se cierra (útil para logs / CG),
+        luego hace pop.
         """
+        size = self.offsets[-1]
         self.scopes.pop()
         self.offsets.pop()
         self.scopeId -= 1
-        return self.scopeId
+        return size
 
     def addSymbol(
         self,
@@ -61,6 +70,8 @@ class ScopeManager:
 
         width = getTypeWidth(type_)
         offset = self.offsets[-1]
+        storage = self.currentStorage()
+        is_ref = isReferenceType(type_)
 
         symbol = Symbol(
             name=name,
@@ -71,7 +82,9 @@ class ScopeManager:
             width=width,
             initialized=initialized,
             init_value_type=init_value_type,
-            init_note=init_note
+            init_note=init_note,
+            storage=storage,
+            is_ref=is_ref
         )
 
         self.scopes[-1][name] = symbol

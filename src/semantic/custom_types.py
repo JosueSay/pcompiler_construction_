@@ -1,7 +1,3 @@
-# Tipos básicos soportados por Compiscript
-# Estos tipos se utilizan en el análisis semántico para validar expresiones,
-# declaraciones y tipos de retorno, así como para el manejo de memoria.
-
 class Type:
     """
     Clase base para todos los tipos de datos.
@@ -9,17 +5,9 @@ class Type:
     """
 
     def __eq__(self, other):
-        """
-        Permite comparar dos tipos para verificar si son del mismo tipo concreto.
-        Por ejemplo: IntegerType() == IntegerType() → True
-        """
         return isinstance(other, self.__class__)
 
     def __str__(self):
-        """
-        Retorna el nombre del tipo en minúsculas.
-        Por ejemplo: IntegerType → 'integer'
-        """
         return self.__class__.__name__.replace("Type", "").lower()
 
 
@@ -53,10 +41,101 @@ class ErrorType(Type):
     Tipo de error. Utilizado para propagar errores semánticos y evitar interrupciones.
     No se compara como igual a ningún otro tipo, excepto a sí mismo.
     """
+    def __eq__(self, other):
+        return isinstance(other, ErrorType)
+
+
+class VoidType(Type):
+    """Tipo void: solo válido como tipo de retorno."""
+    pass
+
+
+class ClassType(Type):
+    """
+    Representa una clase definida en el lenguaje.
+    Soporta herencia, atributos y métodos.
+    """
+    def __init__(self, name: str, parent=None):
+        self.name = name
+        self.parent = parent  # Otra instancia de ClassType o None
+        self.members = {}     # { nombre: Type }
 
     def __eq__(self, other):
-        """
-        Solo se considera igual a otro ErrorType.
-        Esto evita errores cascada en validaciones.
-        """
-        return isinstance(other, ErrorType)
+        return isinstance(other, ClassType) and self.name == other.name
+
+    def __str__(self):
+        return f"class {self.name}"
+
+    def has_member(self, name: str):
+        """Verifica si un atributo o método existe en la clase o en su herencia."""
+        if name in self.members:
+            return True
+        if self.parent:
+            return self.parent.has_member(name)
+        return False
+
+    def get_member(self, name: str):
+        """Obtiene el tipo de un atributo o método."""
+        if name in self.members:
+            return self.members[name]
+        if self.parent:
+            return self.parent.get_member(name)
+        return None
+
+
+class StructType(Type):
+    """
+    Representa una estructura definida en el lenguaje.
+    A diferencia de las clases, no soporta herencia ni métodos.
+    """
+    def __init__(self, name: str):
+        self.name = name
+        self.members = {}  # { nombre: Type }
+
+    def __eq__(self, other):
+        return isinstance(other, StructType) and self.name == other.name
+
+    def __str__(self):
+        return f"struct {self.name}"
+
+    def has_member(self, name: str):
+        return name in self.members
+
+    def get_member(self, name: str):
+        return self.members.get(name)
+
+
+class ArrayType(Type):
+    """
+    Arreglo homogéneo de un tipo base.
+    """
+    def __init__(self, elem_type: Type):
+        self.elem_type = elem_type
+
+    def __eq__(self, other):
+        return isinstance(other, ArrayType) and self.elem_type == other.elem_type
+
+    def __str__(self):
+        return f"{self.elem_type}[]"
+
+
+class FunctionType(Type):
+    """
+    Representa el tipo de una función: parámetros y retorno.
+    """
+    def __init__(self, param_types, return_type):
+        self.param_types = param_types or []
+        self.return_type = return_type
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, FunctionType) and
+            len(self.param_types) == len(other.param_types) and
+            all(a == b for a, b in zip(self.param_types, other.param_types)) and
+            self.return_type == other.return_type
+        )
+
+    def __str__(self):
+        params = ", ".join(str(p) for p in self.param_types)
+        ret = str(self.return_type) if self.return_type else "void"
+        return f"({params}) -> {ret}"
