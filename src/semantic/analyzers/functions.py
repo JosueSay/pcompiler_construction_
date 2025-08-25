@@ -82,7 +82,23 @@ class FunctionsAnalyzer:
 
         expected_r = rtype if rtype is not None else VoidType()
         self.v.fn_stack.append(expected_r)
-        block_result = self.v.visit(ctx.block())  # puede contener {"terminated": ...}
+        
+        
+        # --- guardar flags de terminación del bloque exterior ---
+        saved_term = self.v._stmt_just_terminated
+        saved_node = self.v._stmt_just_terminator_node
+        self.v._stmt_just_terminated = None
+        self.v._stmt_just_terminator_node = None
+        
+        
+        block_result = self.v.visit(ctx.block())  # cuerpo de la función
+
+        
+        
+        # --- restaurar flags para que NO se propaguen al padre ---
+        self.v._stmt_just_terminated = saved_term
+        self.v._stmt_just_terminator_node = saved_node
+        
         self.v.fn_stack.pop()
 
         fn_ctx = self.v.fn_ctx_stack.pop()
