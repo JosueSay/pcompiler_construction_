@@ -63,6 +63,26 @@ class StatementsAnalyzer:
         }
 
     def visitVariableDeclaration(self, ctx):
+        """
+        Declara variables con **init opcional**.
+
+        Reglas:
+        - Debe existir anotación de tipo (no hay inferencia).
+        - `void` no es válido como tipo de variable.
+        - Si NO hay inicializador:
+            * Tipos de **referencia** (clase / arreglos / function): se inicializan a **null**
+            (initialized=True, init_value_type=NullType, init_note="default-null").
+            * Tipos **valor** (integer, boolean, string): se permiten **sin inicializar**
+            (initialized=False, init_value_type=None, init_note="uninitialized").
+            > Nota: El uso previo a asignación deberá marcarse como error en el visit de identificadores.
+        - Si hay inicializador:
+            * Se valida asignabilidad `declared_type ← rhs_type`.
+            * Se marca initialized=True, con `init_value_type=rhs_type`.
+
+        Además:
+        - Se registra el símbolo en la tabla (o error si hay colisión).
+        - Si estamos dentro de una **clase**, se registra el **atributo** con su tipo declarado.
+        """
         name = ctx.Identifier().getText()
         ann = ctx.typeAnnotation()
         init = ctx.initializer()
@@ -87,25 +107,20 @@ class StatementsAnalyzer:
         init_value_type = None
         init_note = None
 
+        # --- Sin inicializador: permitir declaración laxa ---
         if not init:
             if isReferenceType(declared_type):
+                # Referencias: default a null
                 initialized = True
                 init_value_type = NullType()
                 init_note = "default-null"
             else:
-                # ❗ Reporta el error de falta de inicialización...
-                self.v._append_err(SemanticError(
-                    f"La variable '{name}' de tipo {declared_type} debe inicializarse; "
-                    "null solo es asignable a tipos de referencia.",
-                    line=ctx.start.line, column=ctx.start.column))
-
-                # ...pero si estamos en un contexto de clase, igual registra el atributo
-                if self.v.class_stack:
-                    current_class = self.v.class_stack[-1]
-                    self.v.class_handler.add_attribute(current_class, name, declared_type)
-                    log_semantic(f"[class.attr] {current_class}.{name}: {declared_type} (registrado pese a init faltante)")
-                return
+                # Tipos valor: permitido sin inicializar
+                initialized = False
+                init_value_type = None
+                init_note = "uninitialized"
         else:
+            # --- Con inicializador: validar asignabilidad ---
             rhs_type = self.v.visit(init.expression())
             if rhs_type is None:
                 return
@@ -113,6 +128,7 @@ class StatementsAnalyzer:
                 self.v._append_err(SemanticError(
                     f"Asignación incompatible: no se puede asignar {rhs_type} a {declared_type} en '{name}'.",
                     line=ctx.start.line, column=ctx.start.column))
+                # En contexto de clase, aún registramos el atributo con el tipo declarado
                 if self.v.class_stack:
                     current_class = self.v.class_stack[-1]
                     self.v.class_handler.add_attribute(current_class, name, declared_type)
@@ -122,24 +138,28 @@ class StatementsAnalyzer:
             init_value_type = rhs_type
             init_note = "explicit"
 
-        # Declarar el símbolo (solo si no hubo error arriba)
+        # --- Declarar símbolo ---
         try:
             sym = self.v.scopeManager.addSymbol(
                 name, declared_type, category=SymbolCategory.VARIABLE,
                 initialized=initialized, init_value_type=init_value_type, init_note=init_note
             )
             msg = f"Variable '{name}' declarada con tipo: {declared_type}, tamaño: {sym.width} bytes"
-            if initialized: msg += f" (init={sym.init_value_type}, note={sym.init_note})"
+            msg += f" (initialized={sym.initialized}"
+            msg += f", init_value_type={sym.init_value_type}" if sym.init_value_type is not None else ""
+            msg += f", note={sym.init_note}" if sym.init_note else ""
+            msg += ")"
             log_semantic(msg)
         except Exception as e:
             self.v._append_err(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
             return
 
-        # Registrar atributo de clase en el caso normal
+        # --- Atributo de clase (si aplica) ---
         if self.v.class_stack:
             current_class = self.v.class_stack[-1]
             self.v.class_handler.add_attribute(current_class, name, declared_type)
             log_semantic(f"[class.attr] {current_class}.{name}: {declared_type}")
+
 
     def visitConstantDeclaration(self, ctx):
         name = ctx.Identifier().getText() if ctx.Identifier() else "<unnamed-const>"
