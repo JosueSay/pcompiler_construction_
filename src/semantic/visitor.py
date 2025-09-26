@@ -154,5 +154,6 @@ class VisitorCPS(CompiscriptVisitor):
     def visitNewExpr(self, ctx):             return self.exprs.visitNewExpr(ctx)
     def visitLeftHandSide(self, ctx):        return self.exprs.visitLeftHandSide(ctx)
 
-    def visitExprNoAssign(self, ctx):        return self.visitChildren(ctx)
+    def visitExpression(self, ctx):          return self.exprs.visitExpression(ctx)
+    def visitExprNoAssign(self, ctx):        return self.exprs.visitExprNoAssign(ctx)
     def visitPrimaryExpr(self, ctx):         return self.exprs.visitPrimaryExpr(ctx)

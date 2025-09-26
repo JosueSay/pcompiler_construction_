@@ -4,13 +4,16 @@ from semantic.type_system import isAssignable, isReferenceType
 from semantic.registry.type_resolver import resolve_annotated_type, validate_known_types
 from semantic.errors import SemanticError
 from logs.logger_semantic import log_semantic
+from ir.tac import Op
 
 class StatementsAnalyzer:
     def __init__(self, v):
         self.v = v
 
     def visitExpressionStatement(self, ctx):
-        return self.v.visit(ctx.expression())
+        t = self.v.visit(ctx.expression())
+        self.v.emitter.temp_pool.resetPerStatement()
+        return t
 
     def visitBlock(self, ctx):
         """
@@ -27,8 +30,8 @@ class StatementsAnalyzer:
         for st in ctx.statement():
             # Si ya sabemos que el flujo terminó antes de esta sentencia => dead code
             if terminated_in_block:
-                # línea/col seguras si el nodo tiene 'start'
-                try:
+                
+                try:# línea/col seguras si el nodo tiene 'start'
                     line = st.start.line
                     col = st.start.column
                 except Exception:
@@ -91,16 +94,19 @@ class StatementsAnalyzer:
             self.v.appendErr(SemanticError(
                 f"La variable '{name}' debe declarar un tipo (no se permite inferencia).",
                 line=ctx.start.line, column=ctx.start.column))
+            self.v.emitter.temp_pool.resetPerStatement()
             return
 
         declared_type = resolve_annotated_type(ann)
         if not validate_known_types(declared_type, self.v.known_classes, ctx, f"variable '{name}'", self.v.errors):
+            self.v.emitter.temp_pool.resetPerStatement()
             return
 
         if isinstance(declared_type, VoidType):
             self.v.appendErr(SemanticError(
                 f"La variable '{name}' no puede ser de tipo void.",
                 line=ctx.start.line, column=ctx.start.column))
+            self.v.emitter.temp_pool.resetPerStatement()
             return
 
         initialized = False
@@ -123,6 +129,7 @@ class StatementsAnalyzer:
             # --- Con inicializador: validar asignabilidad ---
             rhs_type = self.v.visit(init.expression())
             if rhs_type is None:
+                self.v.emitter.temp_pool.resetPerStatement()
                 return
             if not isAssignable(declared_type, rhs_type):
                 self.v.appendErr(SemanticError(
@@ -133,6 +140,7 @@ class StatementsAnalyzer:
                     current_class = self.v.class_stack[-1]
                     self.v.class_handler.add_attribute(current_class, name, declared_type)
                     log_semantic(f"[class.attr] {current_class}.{name}: {declared_type} (registrado pese a asignación incompatible)")
+                self.v.emitter.temp_pool.resetPerStatement()
                 return
             initialized = True
             init_value_type = rhs_type
@@ -152,6 +160,7 @@ class StatementsAnalyzer:
             log_semantic(msg)
         except Exception as e:
             self.v.appendErr(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
+            self.v.emitter.temp_pool.resetPerStatement()
             return
 
         # --- Atributo de clase (si aplica) ---
@@ -159,6 +168,15 @@ class StatementsAnalyzer:
             current_class = self.v.class_stack[-1]
             self.v.class_handler.add_attribute(current_class, name, declared_type)
             log_semantic(f"[class.attr] {current_class}.{name}: {declared_type}")
+        
+        # --- Emisión TAC del inicializador ---
+        if init is not None:
+            p, _ = self.v.exprs.deepPlace(init.expression())
+            rhs_place = p or init.expression().getText()
+            self.v.emitter.emit(Op.ASSIGN, arg1=rhs_place, res=name)
+
+        # Reinicio de temporales por sentencia
+        self.v.emitter.temp_pool.resetPerStatement()
 
 
     def visitConstantDeclaration(self, ctx):
@@ -170,32 +188,38 @@ class StatementsAnalyzer:
             self.v.appendErr(SemanticError(
                 f"La constante '{name}' debe declarar un tipo.",
                 line=ctx.start.line, column=ctx.start.column))
+            self.v.emitter.temp_pool.resetPerStatement()
             return
 
         declared_type = resolve_annotated_type(ann)
         if not validate_known_types(declared_type, self.v.known_classes, ctx, f"constante '{name}'", self.v.errors):
+            self.v.emitter.temp_pool.resetPerStatement()
             return
 
         if isinstance(declared_type, VoidType):
             self.v.appendErr(SemanticError(
                 f"La constante '{name}' no puede ser de tipo void.",
                 line=ctx.start.line, column=ctx.start.column))
+            self.v.emitter.temp_pool.resetPerStatement()
             return
 
         if expr_ctx is None:
             self.v.appendErr(SemanticError(
                 f"Constante '{name}' sin inicializar (se requiere '= <expresión>').",
                 line=ctx.start.line, column=ctx.start.column))
+            self.v.emitter.temp_pool.resetPerStatement()
             return
 
         rhs_type = self.v.visit(expr_ctx)
         if rhs_type is None:
+            self.v.emitter.temp_pool.resetPerStatement()
             return
 
         if not isAssignable(declared_type, rhs_type):
             self.v.appendErr(SemanticError(
                 f"Asignación incompatible: no se puede asignar {rhs_type} a {declared_type} en constante '{name}'.",
                 line=ctx.start.line, column=ctx.start.column))
+            self.v.emitter.temp_pool.resetPerStatement()
             return
 
         try:
@@ -203,6 +227,18 @@ class StatementsAnalyzer:
             log_semantic(f"Constante '{name}' declarada con tipo: {declared_type}, tamaño: {sym.width} bytes")
         except Exception as e:
             self.v.appendErr(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
+            self.v.emitter.temp_pool.resetPerStatement()
+            return
+        
+        # Emisión TAC: k = <expr.place>
+        p, _ = self.v.exprs.deepPlace(expr_ctx)
+        rhs_place = p or expr_ctx.getText()
+        self.v.emitter.emit(Op.ASSIGN, arg1=rhs_place, res=name)
+
+
+
+        # Reinicio de temporales por sentencia
+        self.v.emitter.temp_pool.resetPerStatement()
 
     def visitAssignment(self, ctx):
         """
@@ -213,7 +249,7 @@ class StatementsAnalyzer:
         exprs = list(ctx.expression())
         n = len(exprs)
 
-        # ---- Caso 1: asignación a variable simple ----
+        # Caso 1: asignación a variable simple
         if n == 1 and ctx.Identifier() is not None:
             name = ctx.Identifier().getText()
             sym = self.v.scopeManager.lookup(name)
@@ -221,23 +257,35 @@ class StatementsAnalyzer:
                 self.v.appendErr(SemanticError(
                     f"Uso de variable no declarada: '{name}'",
                     line=ctx.start.line, column=ctx.start.column))
+                self.v.emitter.temp_pool.resetPerStatement()
                 return
             if sym.category == SymbolCategory.CONSTANT:
                 self.v.appendErr(SemanticError(
                     f"No se puede modificar la constante '{name}'.",
                     line=ctx.start.line, column=ctx.start.column))
+                self.v.emitter.temp_pool.resetPerStatement()
                 return
 
             rhs_type = self.v.visit(exprs[0])
             if rhs_type is None:
+                self.v.emitter.temp_pool.resetPerStatement()
                 return
             if not isAssignable(sym.type, rhs_type):
                 self.v.appendErr(SemanticError(
                     f"Asignación incompatible: no se puede asignar {rhs_type} a {sym.type} en '{name}'.",
                     line=ctx.start.line, column=ctx.start.column))
+                self.v.emitter.temp_pool.resetPerStatement()
+                return
+
+            # TAC: name = <expr.place>
+            p, _ = self.v.exprs.deepPlace(exprs[0])
+            rhs_place = p or exprs[0].getText()
+            self.v.emitter.emit(Op.ASSIGN, arg1=rhs_place, res=name)
+            self.v.emitter.temp_pool.resetPerStatement()
             return
 
-        # ---- Caso 2: asignación a propiedad obj.prop = expr ----
+
+        # Caso 2: obj.prop = expr
         if n == 2:
             lhs_obj = exprs[0]
             rhs_exp = exprs[1]
@@ -253,16 +301,16 @@ class StatementsAnalyzer:
                 self.v.appendErr(SemanticError(
                     f"Asig. a propiedad en no-objeto: '{obj_t}'.",
                     line=ctx.start.line, column=ctx.start.column))
+                self.v.emitter.temp_pool.resetPerStatement()
                 return
 
             class_name = obj_t.name
-
-            # Buscar tipo de propiedad (con herencia)
             prop_t = self.v.class_handler.get_attribute_type(class_name, prop_name)
             if prop_t is None:
                 self.v.appendErr(SemanticError(
                     f"Miembro '{prop_name}' no declarado en clase '{class_name}'.",
                     line=ctx.start.line, column=ctx.start.column))
+                self.v.emitter.temp_pool.resetPerStatement()
                 return
 
             rhs_t = self.v.visit(rhs_exp)
@@ -270,12 +318,24 @@ class StatementsAnalyzer:
                 self.v.appendErr(SemanticError(
                     f"Asignación incompatible: no se puede asignar {rhs_t} a {prop_t} en '{class_name}.{prop_name}'.",
                     line=ctx.start.line, column=ctx.start.column))
+                self.v.emitter.temp_pool.resetPerStatement()
+                return
+
+            # TAC: obj.prop = <rhs.place>
+            p_obj, _ = self.v.exprs.deepPlace(lhs_obj)
+            obj_place = p_obj or lhs_obj.getText()
+            p_rhs, _ = self.v.exprs.deepPlace(rhs_exp)
+            rhs_place = p_rhs or rhs_exp.getText()
+            self.v.emitter.emit(Op.FIELD_STORE, arg1=obj_place, res=rhs_place, label=prop_name)
+            self.v.emitter.temp_pool.resetPerStatement()
             return
 
-        # ---- Fallback ----
+
+        # Fallback
         self.v.appendErr(SemanticError(
-            "Asignación a propiedad (obj.prop = ...) aún no soportada en esta fase.",
+            "Asignación aún no soportada en esta forma por la fase actual.",
             line=ctx.start.line, column=ctx.start.column))
+        self.v.emitter.temp_pool.resetPerStatement()
 
     def visitForeachStatement(self, ctx):
         iter_name = ctx.Identifier().getText()
@@ -300,9 +360,9 @@ class StatementsAnalyzer:
         except Exception as e:
             self.v.appendErr(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
 
-        # El cuerpo es un bloque: su terminación no implica que el foreach sentencie
-        # al bloque externo (porque el foreach por sí mismo no 'termina' el flujo).
         self.v.visit(ctx.block())
         size = self.v.scopeManager.exitScope()
         log_semantic(f"[scope] foreach cerrado; frame_size={size} bytes")
+
+        self.v.emitter.temp_pool.resetPerStatement()
         return {"terminated": False, "reason": None}
