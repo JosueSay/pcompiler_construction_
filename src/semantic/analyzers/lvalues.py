@@ -42,14 +42,14 @@ class LValuesAnalyzer:
             # IndexExpr
             if isinstance(suf, CompiscriptParser.IndexExprContext):
                 if not isinstance(t, ArrayType):
-                    self.v._append_err(SemanticError(
+                    self.v.appendErr(SemanticError(
                         f"Indexación sobre un valor no-arreglo: {t}",
                         line=ctx.start.line, column=ctx.start.column))
                     t = ErrorType(); continue
 
                 idx_t = self.v.visit(suf.expression())
                 if not isinstance(idx_t, IntegerType):
-                    self.v._append_err(SemanticError(
+                    self.v.appendErr(SemanticError(
                         f"Índice no entero en acceso de arreglo: se encontró {idx_t}",
                         line=ctx.start.line, column=ctx.start.column))
                     t = ErrorType(); continue
@@ -65,7 +65,7 @@ class LValuesAnalyzer:
                             idx_val = int(idx_txt)
                             n = int(getattr(lit_t, "_literal_len", -1))
                             if not (0 <= idx_val < n):
-                                self.v._append_err(SemanticError(
+                                self.v.appendErr(SemanticError(
                                     f"Índice fuera de rango: {idx_val}; válido: 0..{n-1}",
                                     line=ctx.start.line, column=ctx.start.column))
                                 t = ErrorType(); continue
@@ -83,7 +83,7 @@ class LValuesAnalyzer:
             # CallExpr
             if isinstance(suf, CompiscriptParser.CallExprContext):
                 if not isinstance(t, FunctionType):
-                    self.v._append_err(SemanticError(
+                    self.v.appendErr(SemanticError(
                         "Llamada a algo que no es función.",
                         line=ctx.start.line, column=ctx.start.column))
                     t = ErrorType(); continue
@@ -96,7 +96,7 @@ class LValuesAnalyzer:
                 expected = len(t.param_types)
                 got = len(arg_types)
                 if got != expected:
-                    self.v._append_err(SemanticError(
+                    self.v.appendErr(SemanticError(
                         f"Número de argumentos inválido: esperados {expected}, recibidos {got}.",
                         line=ctx.start.line, column=ctx.start.column))
                     t = ErrorType(); continue
@@ -104,7 +104,7 @@ class LValuesAnalyzer:
                 ok = True
                 for i, (pt, at) in enumerate(zip(t.param_types, arg_types), start=1):
                     if not isAssignable(pt, at):
-                        self.v._append_err(SemanticError(
+                        self.v.appendErr(SemanticError(
                             f"Argumento #{i} incompatible: no se puede asignar {at} a {pt}.",
                             line=ctx.start.line, column=ctx.start.column))
                         ok = False
@@ -118,7 +118,7 @@ class LValuesAnalyzer:
                 prop_name = suf.Identifier().getText()
 
                 if not isinstance(t, ClassType):
-                    self.v._append_err(SemanticError(
+                    self.v.appendErr(SemanticError(
                         f"Acceso a propiedades en tipo no-objeto '{t}'.",
                         line=ctx.start.line, column=ctx.start.column))
                     t = ErrorType(); continue
@@ -218,7 +218,7 @@ class LValuesAnalyzer:
                     continue
 
                 # 4) Nada: error
-                self.v._append_err(SemanticError(
+                self.v.appendErr(SemanticError(
                     f"Miembro '{prop_name}' no declarado en clase '{class_name}'.",
                     line=ctx.start.line, column=ctx.start.column))
                 t = ErrorType(); lit_t = None; continue

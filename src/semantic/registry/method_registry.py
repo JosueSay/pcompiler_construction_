@@ -4,13 +4,13 @@ class MethodRegistry:
     La firma aquí guarda 'this' como primer parámetro.
     """
     def __init__(self):
-        self._methods = {}
+        self.methods = {}
 
     def register(self, qname, param_types, return_type):
-        self._methods[qname] = (param_types or [], return_type)
+        self.methods[qname] = (param_types or [], return_type)
 
     def lookup(self, qname):
-        return self._methods.get(qname)
+        return self.methods.get(qname)
 
     def exists(self, qname):
-        return qname in self._methods
+        return qname in self.methods

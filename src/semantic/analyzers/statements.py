@@ -34,7 +34,7 @@ class StatementsAnalyzer:
                 except Exception:
                     line = None
                     col = None
-                self.v._append_err(SemanticError(
+                self.v.appendErr(SemanticError(
                     f"Código inalcanzable: el flujo terminó por '{terminator_reason}' antes de esta sentencia.",
                     line=line, column=col, error_type="DeadCode"))
                 # Aún así, visitamos para seguir chequeando tipos/errores
@@ -42,16 +42,16 @@ class StatementsAnalyzer:
                 continue
 
             # Reiniciar el flag que marcan las sentencias terminantes
-            self.v._stmt_just_terminated = None
-            self.v._stmt_just_terminator_node = None
+            self.v.stmt_just_terminated = None
+            self.v.stmt_just_terminator_node = None
 
             # Visitar sentencia normalmente
             result = self.v.visit(st)
 
             # ¿La sentencia que acabamos de visitar terminó el flujo?
-            if self.v._stmt_just_terminated:
+            if self.v.stmt_just_terminated:
                 terminated_in_block = True
-                terminator_reason = self.v._stmt_just_terminated
+                terminator_reason = self.v.stmt_just_terminated
 
         size = self.v.scopeManager.exitScope()
         log_semantic(f"[scope] bloque cerrado; frame_size={size} bytes")
@@ -88,7 +88,7 @@ class StatementsAnalyzer:
         init = ctx.initializer()
 
         if ann is None:
-            self.v._append_err(SemanticError(
+            self.v.appendErr(SemanticError(
                 f"La variable '{name}' debe declarar un tipo (no se permite inferencia).",
                 line=ctx.start.line, column=ctx.start.column))
             return
@@ -98,7 +98,7 @@ class StatementsAnalyzer:
             return
 
         if isinstance(declared_type, VoidType):
-            self.v._append_err(SemanticError(
+            self.v.appendErr(SemanticError(
                 f"La variable '{name}' no puede ser de tipo void.",
                 line=ctx.start.line, column=ctx.start.column))
             return
@@ -125,7 +125,7 @@ class StatementsAnalyzer:
             if rhs_type is None:
                 return
             if not isAssignable(declared_type, rhs_type):
-                self.v._append_err(SemanticError(
+                self.v.appendErr(SemanticError(
                     f"Asignación incompatible: no se puede asignar {rhs_type} a {declared_type} en '{name}'.",
                     line=ctx.start.line, column=ctx.start.column))
                 # En contexto de clase, aún registramos el atributo con el tipo declarado
@@ -151,7 +151,7 @@ class StatementsAnalyzer:
             msg += ")"
             log_semantic(msg)
         except Exception as e:
-            self.v._append_err(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
+            self.v.appendErr(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
             return
 
         # --- Atributo de clase (si aplica) ---
@@ -167,7 +167,7 @@ class StatementsAnalyzer:
         expr_ctx = ctx.expression()
 
         if ann is None:
-            self.v._append_err(SemanticError(
+            self.v.appendErr(SemanticError(
                 f"La constante '{name}' debe declarar un tipo.",
                 line=ctx.start.line, column=ctx.start.column))
             return
@@ -177,13 +177,13 @@ class StatementsAnalyzer:
             return
 
         if isinstance(declared_type, VoidType):
-            self.v._append_err(SemanticError(
+            self.v.appendErr(SemanticError(
                 f"La constante '{name}' no puede ser de tipo void.",
                 line=ctx.start.line, column=ctx.start.column))
             return
 
         if expr_ctx is None:
-            self.v._append_err(SemanticError(
+            self.v.appendErr(SemanticError(
                 f"Constante '{name}' sin inicializar (se requiere '= <expresión>').",
                 line=ctx.start.line, column=ctx.start.column))
             return
@@ -193,7 +193,7 @@ class StatementsAnalyzer:
             return
 
         if not isAssignable(declared_type, rhs_type):
-            self.v._append_err(SemanticError(
+            self.v.appendErr(SemanticError(
                 f"Asignación incompatible: no se puede asignar {rhs_type} a {declared_type} en constante '{name}'.",
                 line=ctx.start.line, column=ctx.start.column))
             return
@@ -202,7 +202,7 @@ class StatementsAnalyzer:
             sym = self.v.scopeManager.addSymbol(name, declared_type, category=SymbolCategory.CONSTANT)
             log_semantic(f"Constante '{name}' declarada con tipo: {declared_type}, tamaño: {sym.width} bytes")
         except Exception as e:
-            self.v._append_err(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
+            self.v.appendErr(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
 
     def visitAssignment(self, ctx):
         """
@@ -218,12 +218,12 @@ class StatementsAnalyzer:
             name = ctx.Identifier().getText()
             sym = self.v.scopeManager.lookup(name)
             if sym is None:
-                self.v._append_err(SemanticError(
+                self.v.appendErr(SemanticError(
                     f"Uso de variable no declarada: '{name}'",
                     line=ctx.start.line, column=ctx.start.column))
                 return
             if sym.category == SymbolCategory.CONSTANT:
-                self.v._append_err(SemanticError(
+                self.v.appendErr(SemanticError(
                     f"No se puede modificar la constante '{name}'.",
                     line=ctx.start.line, column=ctx.start.column))
                 return
@@ -232,7 +232,7 @@ class StatementsAnalyzer:
             if rhs_type is None:
                 return
             if not isAssignable(sym.type, rhs_type):
-                self.v._append_err(SemanticError(
+                self.v.appendErr(SemanticError(
                     f"Asignación incompatible: no se puede asignar {rhs_type} a {sym.type} en '{name}'.",
                     line=ctx.start.line, column=ctx.start.column))
             return
@@ -250,7 +250,7 @@ class StatementsAnalyzer:
 
             obj_t = self.v.visit(lhs_obj)
             if not isinstance(obj_t, ClassType):
-                self.v._append_err(SemanticError(
+                self.v.appendErr(SemanticError(
                     f"Asig. a propiedad en no-objeto: '{obj_t}'.",
                     line=ctx.start.line, column=ctx.start.column))
                 return
@@ -260,20 +260,20 @@ class StatementsAnalyzer:
             # Buscar tipo de propiedad (con herencia)
             prop_t = self.v.class_handler.get_attribute_type(class_name, prop_name)
             if prop_t is None:
-                self.v._append_err(SemanticError(
+                self.v.appendErr(SemanticError(
                     f"Miembro '{prop_name}' no declarado en clase '{class_name}'.",
                     line=ctx.start.line, column=ctx.start.column))
                 return
 
             rhs_t = self.v.visit(rhs_exp)
             if not isAssignable(prop_t, rhs_t):
-                self.v._append_err(SemanticError(
+                self.v.appendErr(SemanticError(
                     f"Asignación incompatible: no se puede asignar {rhs_t} a {prop_t} en '{class_name}.{prop_name}'.",
                     line=ctx.start.line, column=ctx.start.column))
             return
 
         # ---- Fallback ----
-        self.v._append_err(SemanticError(
+        self.v.appendErr(SemanticError(
             "Asignación a propiedad (obj.prop = ...) aún no soportada en esta fase.",
             line=ctx.start.line, column=ctx.start.column))
 
@@ -285,7 +285,7 @@ class StatementsAnalyzer:
             elem_type = iter_expr_type.elem_type
         else:
             if not isinstance(iter_expr_type, ErrorType):
-                self.v._append_err(SemanticError(
+                self.v.appendErr(SemanticError(
                     f"foreach requiere un arreglo; se encontró {iter_expr_type}.",
                     line=ctx.start.line, column=ctx.start.column))
             elem_type = ErrorType()
@@ -298,7 +298,7 @@ class StatementsAnalyzer:
             )
             log_semantic(f"Foreach var '{iter_name}' declarada con tipo: {elem_type}, tamaño: {sym.width} bytes (note=foreach-var)")
         except Exception as e:
-            self.v._append_err(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
+            self.v.appendErr(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
 
         # El cuerpo es un bloque: su terminación no implica que el foreach sentencie
         # al bloque externo (porque el foreach por sí mismo no 'termina' el flujo).

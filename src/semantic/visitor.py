@@ -34,8 +34,8 @@ class VisitorCPS(CompiscriptVisitor):
         self.loop_depth = 0
 
         # Flags internos para detección de terminación por sentencia
-        self._stmt_just_terminated = None        # "return" | "break" | "continue" | "if-else" | None
-        self._stmt_just_terminator_node = None   # nodo ANTLR de la sentencia terminante (opcional)
+        self.stmt_just_terminated = None        # "return" | "break" | "continue" | "if-else" | None
+        self.stmt_just_terminator_node = None   # nodo ANTLR de la sentencia terminante (opcional)
 
         self.lvals = LValuesAnalyzer(self)
         self.exprs = ExpressionsAnalyzer(self, self.lvals)
@@ -47,7 +47,7 @@ class VisitorCPS(CompiscriptVisitor):
 
         log_semantic("", new_session=True)
 
-    def _append_err(self, err):
+    def appendErr(self, err):
         self.errors.append(err)
         return self.diag.extend(err)
 
@@ -60,7 +60,7 @@ class VisitorCPS(CompiscriptVisitor):
                 base = cd.Identifier(1).getText() if len(cd.Identifier()) > 1 else None
 
                 if cname in self.known_classes:
-                    self._append_err(SemanticError(
+                    self.appendErr(SemanticError(
                         f"Clase '{cname}' ya declarada.",
                         line=cd.start.line, column=cd.start.column))
                 else:
@@ -72,7 +72,7 @@ class VisitorCPS(CompiscriptVisitor):
                         log_semantic(f"[class] (pre-scan) declarada: {cname}")
 
                 if base and base not in self.known_classes:
-                    self._append_err(SemanticError(
+                    self.appendErr(SemanticError(
                         f"Clase base '{base}' no declarada para '{cname}'.",
                         line=cd.start.line, column=cd.start.column))
 

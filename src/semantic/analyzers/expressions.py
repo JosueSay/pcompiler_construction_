@@ -41,7 +41,7 @@ class ExpressionsAnalyzer:
             log_semantic(f"Identifier used: {name}")
             sym = self.v.scopeManager.lookup(name)
             if sym is None:
-                self.v._append_err(SemanticError(
+                self.v.appendErr(SemanticError(
                     f"Identificador '{name}' no está declarado.",
                     line=ctx.start.line, column=ctx.start.column))
                 return ErrorType()
@@ -69,7 +69,7 @@ class ExpressionsAnalyzer:
     def visitArrayLiteral(self, ctx):
         expr_ctxs = list(ctx.expression())
         if not expr_ctxs:
-            self.v._append_err(SemanticError(
+            self.v.appendErr(SemanticError(
                 "Arreglo vacío sin tipo explícito no soportado aún.",
                 line=ctx.start.line, column=ctx.start.column))
             return ErrorType()
@@ -88,7 +88,7 @@ class ExpressionsAnalyzer:
             prims = (IntegerType, StringType, BoolType, FloatType, VoidType, NullType, ErrorType)
             return isinstance(a, prims) and isinstance(b, prims) and a.__class__ is b.__class__
         if not all(same(t, first) for t in elem_types):
-            self.v._append_err(SemanticError(
+            self.v.appendErr(SemanticError(
                 f"Elementos de arreglo con tipos inconsistentes: {[str(t) for t in elem_types]}",
                 line=ctx.start.line, column=ctx.start.column))
             return ErrorType()
@@ -104,7 +104,7 @@ class ExpressionsAnalyzer:
 
     def visitThisExpr(self, ctx):
         if not self.v.in_method or not self.v.class_stack:
-            self.v._append_err(SemanticError(
+            self.v.appendErr(SemanticError(
                 "'this' solo puede usarse dentro de métodos de clase.",
                 line=ctx.start.line, column=ctx.start.column))
             return ErrorType()
@@ -121,7 +121,7 @@ class ExpressionsAnalyzer:
             rhs = self.v.visit(children[i+1])
             res = resultArithmetic(t, rhs, op)
             if isinstance(res, ErrorType):
-                self.v._append_err(SemanticError(
+                self.v.appendErr(SemanticError(
                     f"Operación aritmética inválida: {t} {op} {rhs}",
                     line=ctx.start.line, column=ctx.start.column))
                 t = ErrorType()
@@ -140,7 +140,7 @@ class ExpressionsAnalyzer:
             rhs = self.v.visit(children[i+1])
             res = resultModulo(t, rhs) if op == '%' else resultArithmetic(t, rhs, op)
             if isinstance(res, ErrorType):
-                self.v._append_err(SemanticError(
+                self.v.appendErr(SemanticError(
                     f"Operación multiplicativa inválida: {t} {op} {rhs}",
                     line=ctx.start.line, column=ctx.start.column))
                 t = ErrorType()
@@ -160,7 +160,7 @@ class ExpressionsAnalyzer:
             right_type = self.v.visit(children[i+1])
             res = resultRelational(left_type, right_type)
             if isinstance(res, ErrorType):
-                self.v._append_err(SemanticError(
+                self.v.appendErr(SemanticError(
                     f"Comparación no válida: {left_type} {op} {right_type}",
                     line=ctx.start.line, column=ctx.start.column))
                 final_type = ErrorType()
@@ -181,7 +181,7 @@ class ExpressionsAnalyzer:
             right_type = self.v.visit(children[i+1])
             res = resultEquality(left_type, right_type)
             if isinstance(res, ErrorType):
-                self.v._append_err(SemanticError(
+                self.v.appendErr(SemanticError(
                     f"Igualdad no válida: {left_type} {op} {right_type}",
                     line=ctx.start.line, column=ctx.start.column))
                 final_type = ErrorType()
@@ -200,7 +200,7 @@ class ExpressionsAnalyzer:
             rhs = self.v.visit(children[i+1])
             res = resultLogical(t, rhs)
             if isinstance(res, ErrorType):
-                self.v._append_err(SemanticError(
+                self.v.appendErr(SemanticError(
                     f"Operación lógica inválida: {t} && {rhs}",
                     line=ctx.start.line, column=ctx.start.column))
                 t = ErrorType()
@@ -218,7 +218,7 @@ class ExpressionsAnalyzer:
             rhs = self.v.visit(children[i+1])
             res = resultLogical(t, rhs)
             if isinstance(res, ErrorType):
-                self.v._append_err(SemanticError(
+                self.v.appendErr(SemanticError(
                     f"Operación lógica inválida: {t} || {rhs}",
                     line=ctx.start.line, column=ctx.start.column))
                 t = ErrorType()
@@ -234,14 +234,14 @@ class ExpressionsAnalyzer:
             if op == '-':
                 res = resultUnaryMinus(inner)
                 if isinstance(res, ErrorType):
-                    self.v._append_err(SemanticError(
+                    self.v.appendErr(SemanticError(
                         f"Operador '-' inválido sobre tipo {inner}",
                         line=ctx.start.line, column=ctx.start.column))
                 return res
             elif op == '!':
                 res = resultUnaryNot(inner)
                 if isinstance(res, ErrorType):
-                    self.v._append_err(SemanticError(
+                    self.v.appendErr(SemanticError(
                         f"Operador '!' inválido sobre tipo {inner}",
                         line=ctx.start.line, column=ctx.start.column))
                 return res
@@ -254,7 +254,7 @@ class ExpressionsAnalyzer:
 
         # Verificación de clase
         if not self.v.class_handler.exists(class_name):
-            self.v._append_err(SemanticError(
+            self.v.appendErr(SemanticError(
                 f"Clase '{class_name}' no declarada.",
                 line=ctx.start.line, column=ctx.start.column))
             return ErrorType()
@@ -283,7 +283,7 @@ class ExpressionsAnalyzer:
         if found_sig is None:
             # No existe ningún constructor en la cadena: solo permite 0 args
             if len(arg_types) != 0:
-                self.v._append_err(SemanticError(
+                self.v.appendErr(SemanticError(
                     f"Constructor de '{class_name}' no declarado; se esperaban 0 argumentos.",
                     line=ctx.start.line, column=ctx.start.column))
         else:
@@ -291,7 +291,7 @@ class ExpressionsAnalyzer:
             # param_types incluye 'this' como primer parámetro
             expected = len(param_types) - 1
             if len(arg_types) != expected:
-                self.v._append_err(SemanticError(
+                self.v.appendErr(SemanticError(
                     f"Número de argumentos inválido para '{ctor_owner}.constructor': "
                     f"esperados {expected}, recibidos {len(arg_types)}.",
                     line=ctx.start.line, column=ctx.start.column))
@@ -299,7 +299,7 @@ class ExpressionsAnalyzer:
                 # chequeo de asignabilidad posicional
                 for i, (pt, at) in enumerate(zip(param_types[1:], arg_types), start=1):
                     if not isAssignable(pt, at):
-                        self.v._append_err(SemanticError(
+                        self.v.appendErr(SemanticError(
                             f"Argumento #{i} incompatible en constructor de '{ctor_owner}': "
                             f"no se puede asignar {at} a {pt}.",
                             line=ctx.start.line, column=ctx.start.column))
@@ -316,7 +316,7 @@ class ExpressionsAnalyzer:
         obj_type = self.v.visit(ctx.expression())
 
         if not isinstance(obj_type, ClassType):
-            self.v._append_err(SemanticError(
+            self.v.appendErr(SemanticError(
                 f"No se puede acceder a propiedades de tipo '{obj_type}'.",
                 line=ctx.start.line, column=ctx.start.column))
             return ErrorType()
@@ -327,7 +327,7 @@ class ExpressionsAnalyzer:
         # Atributo con herencia
         prop_t = self.v.class_handler.get_attribute_type(class_name, prop_name)
         if prop_t is None:
-            self.v._append_err(SemanticError(
+            self.v.appendErr(SemanticError(
                 f"Clase '{class_name}' no tiene propiedad '{prop_name}'.",
                 line=ctx.start.line, column=ctx.start.column))
             return ErrorType()

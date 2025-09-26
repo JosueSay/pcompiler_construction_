@@ -61,7 +61,7 @@ class ClassesAnalyzer:
                 pname = p.Identifier().getText()
                 tctx = p.type_()
                 if tctx is None:
-                    self.v._append_err(SemanticError(
+                    self.v.appendErr(SemanticError(
                         f"Parámetro '{pname}' debe declarar tipo (en método {qname}).",
                         line=p.start.line, column=p.start.column))
                     ptype = ErrorType()
@@ -110,7 +110,7 @@ class ClassesAnalyzer:
             if found_base is not None:
                 base_params, base_ret = base_sig
                 if not signatures_equal(param_types, rtype, base_params, base_ret):
-                    self.v._append_err(SemanticError(
+                    self.v.appendErr(SemanticError(
                         f"Override inválido de '{method_name}' en '{current_class}'; "
                         f"la firma no coincide con la de la clase base '{found_base}'.",
                         line=ctx_fn.start.line, column=ctx_fn.start.column))
@@ -133,7 +133,7 @@ class ClassesAnalyzer:
 
             log_semantic(f"[method] declarada: {qname}({', '.join(param_names)}) -> {rtype if rtype else 'void?'}")
         except Exception as e:
-            self.v._append_err(SemanticError(str(e), line=ctx_fn.start.line, column=ctx_fn.start.column))
+            self.v.appendErr(SemanticError(str(e), line=ctx_fn.start.line, column=ctx_fn.start.column))
             return self.v.visit(ctx_fn.block())
 
         # 4) Scope del método + parámetros
@@ -147,21 +147,21 @@ class ClassesAnalyzer:
                 )
                 log_semantic(f"[param] {pname}: {ptype}, offset={psym.offset}")
             except Exception as e:
-                self.v._append_err(SemanticError(str(e), line=ctx_fn.start.line, column=ctx_fn.start.column))
+                self.v.appendErr(SemanticError(str(e), line=ctx_fn.start.line, column=ctx_fn.start.column))
 
         expected_r = rtype if rtype is not None else VoidType()
         self.v.fn_stack.append(expected_r)
 
         # --- SAVE/RESTORE para no propagar 'return' del método al bloque/clase exterior ---
-        saved_term = self.v._stmt_just_terminated
-        saved_node = getattr(self.v, "_stmt_just_terminator_node", None)
-        self.v._stmt_just_terminated = None
-        self.v._stmt_just_terminator_node = None
+        saved_term = self.v.stmt_just_terminated
+        saved_node = getattr(self.v, "stmt_just_terminator_node", None)
+        self.v.stmt_just_terminated = None
+        self.v.stmt_just_terminator_node = None
         try:
             self.v.visit(ctx_fn.block())
         finally:
-            self.v._stmt_just_terminated = saved_term
-            self.v._stmt_just_terminator_node = saved_node
+            self.v.stmt_just_terminated = saved_term
+            self.v.stmt_just_terminator_node = saved_node
         # -------------------------------------------------------------------------------
 
         self.v.fn_stack.pop()

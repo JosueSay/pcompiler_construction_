@@ -19,14 +19,14 @@ class FunctionsAnalyzer:
                 pname = p.Identifier().getText()
                 tctx = p.type_()
                 if tctx is None:
-                    self.v._append_err(SemanticError(
+                    self.v.appendErr(SemanticError(
                         f"Parámetro '{pname}' debe declarar tipo.",
                         line=p.start.line, column=p.start.column))
                     ptype = ErrorType()
                 else:
                     ptype = resolve_typectx(tctx)
                     if isinstance(ptype, VoidType):
-                        self.v._append_err(SemanticError(
+                        self.v.appendErr(SemanticError(
                             f"Parámetro '{pname}' no puede ser de tipo void.",
                             line=p.start.line, column=p.start.column))
                         ptype = ErrorType()
@@ -57,7 +57,7 @@ class FunctionsAnalyzer:
             fsym.captures = CaptureInfo(captured=[])
             log_semantic(f"[function] declarada: {name}({', '.join(param_names)}) -> {rtype if rtype else 'void?'}")
         except Exception as e:
-            self.v._append_err(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
+            self.v.appendErr(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
             return self.v.visit(ctx.block())
 
         # Abrir scope de función y registrar parámetros
@@ -78,17 +78,17 @@ class FunctionsAnalyzer:
                 )
                 log_semantic(f"[param] {pname}: {ptype}, offset={psym.offset}")
             except Exception as e:
-                self.v._append_err(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
+                self.v.appendErr(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
 
         expected_r = rtype if rtype is not None else VoidType()
         self.v.fn_stack.append(expected_r)
         
         
         # --- guardar flags de terminación del bloque exterior ---
-        saved_term = self.v._stmt_just_terminated
-        saved_node = self.v._stmt_just_terminator_node
-        self.v._stmt_just_terminated = None
-        self.v._stmt_just_terminator_node = None
+        saved_term = self.v.stmt_just_terminated
+        saved_node = self.v.stmt_just_terminator_node
+        self.v.stmt_just_terminated = None
+        self.v.stmt_just_terminator_node = None
         
         
         block_result = self.v.visit(ctx.block())  # cuerpo de la función
@@ -96,8 +96,8 @@ class FunctionsAnalyzer:
         
         
         # --- restaurar flags para que NO se propaguen al padre ---
-        self.v._stmt_just_terminated = saved_term
-        self.v._stmt_just_terminator_node = saved_node
+        self.v.stmt_just_terminated = saved_term
+        self.v.stmt_just_terminator_node = saved_node
         
         self.v.fn_stack.pop()
 
