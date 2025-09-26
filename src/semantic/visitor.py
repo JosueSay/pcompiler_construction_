@@ -7,6 +7,9 @@ from semantic.diagnostics import Diagnostics
 from semantic.registry.method_registry import MethodRegistry
 from semantic.class_handler import ClassHandler
 
+# IR
+from ir.emitter import Emitter
+
 # Analyzers
 from semantic.analyzers.lvalues import LValuesAnalyzer
 from semantic.analyzers.expressions import ExpressionsAnalyzer
@@ -19,12 +22,14 @@ from semantic.analyzers.controlFlow import ControlFlowAnalyzer
 from semantic.errors import SemanticError
 
 class VisitorCPS(CompiscriptVisitor):
-    def __init__(self):
+    def __init__(self, emitter: Emitter | None = None):
         self.errors = []
         self.diag = Diagnostics()
         self.scopeManager = ScopeManager()
         self.method_registry = MethodRegistry()
         self.class_handler = ClassHandler()
+        
+        self.emitter: Emitter = emitter or Emitter()
 
         self.known_classes = set()
         self.class_stack = []

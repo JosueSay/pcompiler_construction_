@@ -4,12 +4,7 @@ from antlr_gen.CompiscriptLexer import CompiscriptLexer
 from antlr_gen.CompiscriptParser import CompiscriptParser
 from semantic.visitor import VisitorCPS
 from logs.logger_semantic import start_run, log_semantic
-# Si existe, impórtalo; de lo contrario se usa el fallback
-try:
-    from logs.logger_semantic import current_out_dir
-except ImportError:
-    current_out_dir = None  # type: ignore
-
+from ir.emitter import Emitter
 from logs.reporters import write_symbols_log, write_ast_text, write_ast_html
 from ir.emitter import Emitter
 from datetime import datetime
@@ -40,18 +35,21 @@ def main(argv: list[str]) -> None:
 
     t0: float = time.perf_counter()
     tree = parser.program()
-    visitor: VisitorCPS = VisitorCPS()
+    emitter: Emitter = Emitter(program_name=stem)
+    visitor: VisitorCPS = VisitorCPS(emitter)
     visitor.visit(tree)
     t1: float = time.perf_counter()
 
+    # reporte semantico/ast
     write_symbols_log(visitor.scopeManager.allSymbols(), stem)
     write_ast_text(tree, stem)
     write_ast_html(tree, stem)
 
-    emitter: Emitter = Emitter(program_name=stem)
-    out_dir: str = current_out_dir() if callable(current_out_dir) else getOutDirFallback()
-    tac_txt: str = emitter.writeTacText(out_dir, stem)
-    tac_html: str = emitter.writeTacHtml(out_dir, stem)
+    # reporte tac
+    out_dir: str = getOutDirFallback()
+    tac_txt: str = visitor.emitter.writeTacText(out_dir, stem)
+    tac_html: str = visitor.emitter.writeTacHtml(out_dir, stem)
+    
     log_semantic(f"[TAC] escrito: {tac_txt}", force=True)
     log_semantic(f"[TAC] escrito: {tac_html}", force=True)
 

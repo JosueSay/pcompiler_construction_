@@ -16,6 +16,10 @@ class Symbol:
         init_note (str|None): Nota breve del origen de la inicialización (p.ej. 'explicit', 'default-null', 'missing-initializer').
         storage (str): 'global' | 'stack' | 'param' (futuro) -> donde vive la celda del símbolo
         is_ref (bool): si el valor almacenado es un puntero (referencia).
+        
+        addr_class (str): 'global' | 'stack' | 'param' (clase lógica usada por el TAC).
+        label (str | None): etiqueta de entrada (funciones/métodos).
+        local_frame_size (int | None): tamaño del marco al cerrar el scope de función/método.
     """
 
     def __init__(
@@ -33,7 +37,10 @@ class Symbol:
         init_note=None,
         *,
         storage="stack",
-        is_ref=False 
+        is_ref=False,
+        addr_class=None,
+        label=None,
+        local_frame_size=None
     ):
         self.name = name
         self.type = type_
@@ -47,18 +54,29 @@ class Symbol:
         self.init_value_type = init_value_type
         self.init_note = init_note
         
-        self.storage = storage       # 'global' o 'stack' -> IC
-        self.is_ref = is_ref         # true si almacena un puntero (string/objeto/array)
+        self.storage = storage          # 'global' o 'stack'
+        self.is_ref = is_ref
+
+        # Vista lógica para el TAC
+        self.addr_class = addr_class or storage   # 'global' | 'stack' | 'param'
+
+        # Metadatos para IR/RA
+        self.label = label
+        self.local_frame_size = local_frame_size
 
     def __repr__(self):
         base = (
             f"Symbol(name={self.name}, type={self.type}, category={self.category}, "
             f"scope={self.scope_id}, offset={self.offset}, width={self.width}, "
-            f"storage={self.storage}, is_ref={self.is_ref}"
+            f"storage={self.storage}, addr_class={self.addr_class}, is_ref={self.is_ref}"
         )
         init_part = f", initialized={self.initialized}"
         if self.init_value_type is not None:
             init_part += f", init_value_type={self.init_value_type}"
         if self.init_note:
             init_part += f", init_note={self.init_note}"
+        if self.label:
+            init_part += f", label={self.label}"
+        if self.local_frame_size is not None:
+            init_part += f", local_frame_size={self.local_frame_size}"
         return base + init_part + ")"

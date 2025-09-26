@@ -72,6 +72,8 @@ class ScopeManager:
         offset = self.offsets[-1]
         storage = self.currentStorage()
         is_ref = isReferenceType(type_)
+        
+        addr_class = "param" if category == SymbolCategory.PARAMETER else storage
 
         symbol = Symbol(
             name=name,
@@ -84,7 +86,8 @@ class ScopeManager:
             init_value_type=init_value_type,
             init_note=init_note,
             storage=storage,
-            is_ref=is_ref
+            is_ref=is_ref,
+            addr_class=addr_class
         )
 
         self.scopes[-1][name] = symbol
@@ -118,3 +121,12 @@ class ScopeManager:
         for scope in self.scopes:
             all_syms.extend(scope.values())
         return all_syms
+    
+    def closeFunctionScope(self, func_symbol: Symbol) -> int:
+        """
+        Cierra el scope actual y actualiza func_symbol.local_frame_size
+        con los bytes usados por locales/temps del scope.
+        """
+        size = self.exitScope()
+        func_symbol.local_frame_size = size
+        return size
