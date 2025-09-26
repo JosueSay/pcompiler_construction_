@@ -82,7 +82,7 @@ def _to_tree_list(ctx):
     name = ctx.__class__.__name__.replace("Context","")
     try:
         text = ctx.getText()
-        if len(text) > 80: text = text[:80] + "…"
+        if len(text) > 80: text = text[:80] + "..."
     except Exception:
         text = ""
     node = {"name": name, "text": text, "children": []}
