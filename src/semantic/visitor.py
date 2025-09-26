@@ -50,7 +50,7 @@ class VisitorCPS(CompiscriptVisitor):
         self.returns = ReturnsAnalyzer(self)
         self.ctrl = ControlFlowAnalyzer(self)
 
-        log_semantic("", new_session=True)
+        log_semantic("")
 
     def appendErr(self, err):
         self.errors.append(err)

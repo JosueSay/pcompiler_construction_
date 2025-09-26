@@ -96,16 +96,26 @@ class Emitter:
             lines.append(q.toText())
         return "\n".join(lines) + "\n"
 
-    def writeTacText(self, out_dir: str, stem: str) -> str:
+    def writeTacText(self, out_dir: str, stem: str, *, simple_names: bool = False) -> str:
+        """
+        Si simple_names=True, escribe 'program.tac' dentro de out_dir.
+        De lo contrario, usa '<stem>.tac' (compatibilidad).
+        """
         os.makedirs(out_dir, exist_ok=True)
-        path = os.path.join(out_dir, f"{stem}.tac")
+        filename = "program.tac" if simple_names else f"{stem}.tac"
+        path = os.path.join(out_dir, filename)
         with open(path, "w", encoding="utf-8") as f:
             f.write(self.toText())
         return path
 
-    def writeTacHtml(self, out_dir: str, stem: str) -> str:
+    def writeTacHtml(self, out_dir: str, stem: str, *, simple_names: bool = False) -> str:
+        """
+        Si simple_names=True, escribe 'program.tac.html' dentro de out_dir.
+        De lo contrario, usa '<stem>.tac.html'.
+        """
         os.makedirs(out_dir, exist_ok=True)
-        path = os.path.join(out_dir, f"{stem}.tac.html")
+        filename = "program.tac.html" if simple_names else f"{stem}.tac.html"
+        path = os.path.join(out_dir, filename)
         body = self.toText().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         html = (
             "<!doctype html><meta charset='utf-8'>"
