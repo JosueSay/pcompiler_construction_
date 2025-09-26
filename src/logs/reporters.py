@@ -6,13 +6,15 @@ def safe(s):
     try: return str(s)
     except Exception: return "<repr>"
 
+
 def write_symbols_log(symbols, output_stem: str):
     """
-    Escribe un .symbols.log
+    Escribe 'symbols.log' y 'symbols.html' dentro del current_out_dir().
+    (output_stem se mantiene por compatibilidad, pero no se usa para el nombre del archivo.)
     """
     out_dir = current_out_dir()
-    log_path = os.path.join(out_dir, f"{output_stem}.symbols.log")
-    html_path = os.path.join(out_dir, f"{output_stem}.symbols.html")
+    log_path = os.path.join(out_dir, "symbols.log")
+    html_path = os.path.join(out_dir, "symbols.html")
 
     # .log
     with open(log_path, "w", encoding="utf-8") as f:
@@ -93,6 +95,7 @@ def toTreeList(ctx):
         pass
     return node
 
+
 def write_ast_text(tree, output_stem: str):
     """
     Escribe .ast.txt
@@ -104,13 +107,13 @@ def write_ast_text(tree, output_stem: str):
             dump(c, d+1)
     t = toTreeList(tree)
     dump(t)
-    out_path = os.path.join(current_out_dir(), f"{output_stem}.ast.txt")
+    out_path = os.path.join(current_out_dir(), "ast.txt")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(out))
 
 def write_ast_html(tree, output_stem: str):
     """
-    Escribe .ast.html
+    Escribe 'ast.html' en la carpeta de la corrida.
     """
     t = toTreeList(tree)
 
@@ -134,6 +137,6 @@ small{{font-size:12px}}
 <h1>AST (preview)</h1>
 <ul>{render(t)}</ul>
 </body></html>"""
-    out_path = os.path.join(current_out_dir(), f"{output_stem}.ast.html")
+    out_path = os.path.join(current_out_dir(), "ast.html")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html_doc)

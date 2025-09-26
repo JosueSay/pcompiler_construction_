@@ -10,33 +10,34 @@ os.makedirs(OUT_DIR, exist_ok=True)
 # Estado global por corrida
 run_ts = None
 semantic_log_path = None
+run_out_dir = None 
 lock = threading.Lock()
-
-# Verbosidad (para no escribir cada literal/identificador si no quieres)
 VERBOSE = os.environ.get("CPS_VERBOSE", "1") not in ("0", "false", "False")
 
 def start_run(output_stem: str):
     """
     Prepara archivo de semantic log para esta corrida.
     """
-    global run_ts, semantic_log_path
+    global run_ts, semantic_log_path, run_out_dir
     with lock:
         run_ts = datetime.now()
-        semantic_log_path = os.path.join(OUT_DIR, f"{output_stem}.semantic.log")
+        # carpeta por corrida
+        run_out_dir = os.path.join(OUT_DIR, output_stem)
+        os.makedirs(run_out_dir, exist_ok=True)
+
+        # semantic.log con nombre simple
+        semantic_log_path = os.path.join(run_out_dir, "semantic.log")
         with open(semantic_log_path, "a", encoding="utf-8") as f:
             f.write("\n" + "="*60 + "\n")
             f.write(f"New semantic analysis run: {run_ts}\n")
             f.write("="*60 + "\n")
 
-def log_semantic(message: str, *, force: bool = False, new_session: bool = False):
+def log_semantic(message: str, *, force: bool = False):
     """
     Escribe una línea en el archivo de semantic log actual.
-    - 'new_session' se mantiene por compatibilidad con código antiguo y se ignora (el header lo escribe start_run()).
-    - 'force' ignora VERBOSE.
     """
-    # Ignoramos new_session: el encabezado ya lo escribe start_run()
     if not semantic_log_path:
-        # fallback legacy
+        # Fallback legacy si alguien llama sin start_run
         legacy = os.path.join(BASE_DIR, "semantic.log")
         with open(legacy, "a", encoding="utf-8") as f:
             f.write(message + "\n")
@@ -49,7 +50,7 @@ def log_semantic(message: str, *, force: bool = False, new_session: bool = False
         f.write(message + "\n")
 
 def current_out_dir():
-    return OUT_DIR
+    return run_out_dir or OUT_DIR
 
 def current_timestamp():
     return run_ts
