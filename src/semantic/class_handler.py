@@ -1,11 +1,11 @@
-from typing import Dict, Optional
+from typing import Optional
 from semantic.custom_types import Type
 
 class ClassInfo:
     def __init__(self, name: str, base: Optional[str] = None):
         self.name = name
         self.base = base  # nombre de la clase base o None
-        self.attributes: Dict[str, Type] = {}  # nombre -> Type
+        self.attributes: dict[str, Type] = {}  # nombre -> Type
 
 class ClassHandler:
     """
@@ -21,7 +21,7 @@ class ClassHandler:
       - iter_bases(name) -> Iterator[str]
     """
     def __init__(self):
-        self._classes: Dict[str, ClassInfo] = {}
+        self._classes: dict[str, ClassInfo] = {}
 
     # clases
     def ensure_class(self, name: str, base: Optional[str] = None):

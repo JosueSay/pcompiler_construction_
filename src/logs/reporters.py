@@ -2,7 +2,7 @@ import os
 import html
 from logs.logger_semantic import current_out_dir
 
-def _safe(s):
+def safe(s):
     try: return str(s)
     except Exception: return "<repr>"
 
@@ -35,17 +35,17 @@ def write_symbols_log(symbols, output_stem: str):
     for s in symbols:
         rows.append(
             "<tr>"
-            f"<td>{html.escape(_safe(s.name))}</td>"
-            f"<td>{html.escape(_safe(s.type))}</td>"
-            f"<td>{html.escape(_safe(s.category))}</td>"
+            f"<td>{html.escape(safe(s.name))}</td>"
+            f"<td>{html.escape(safe(s.type))}</td>"
+            f"<td>{html.escape(safe(s.category))}</td>"
             f"<td>{s.scope_id}</td>"
             f"<td>{s.offset}</td>"
             f"<td>{s.width}</td>"
-            f"<td>{html.escape(_safe(s.storage))}</td>"
+            f"<td>{html.escape(safe(s.storage))}</td>"
             f"<td>{'yes' if s.is_ref else 'no'}</td>"
             f"<td>{'yes' if s.initialized else 'no'}</td>"
-            f"<td>{html.escape(_safe(s.init_value_type))}</td>"
-            f"<td>{html.escape(_safe(s.init_note))}</td>"
+            f"<td>{html.escape(safe(s.init_value_type))}</td>"
+            f"<td>{html.escape(safe(s.init_note))}</td>"
             "</tr>"
         )
     html_doc = f"""<!doctype html>
@@ -75,7 +75,7 @@ tr:nth-child(even){{background:#fafafa}}
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(html_doc)
 
-def _to_tree_list(ctx):
+def toTreeList(ctx):
     """
     Devuelve una estructura árbol simple
     """
@@ -88,7 +88,7 @@ def _to_tree_list(ctx):
     node = {"name": name, "text": text, "children": []}
     try:
         for ch in ctx.getChildren():
-            node["children"].append(_to_tree_list(ch))
+            node["children"].append(toTreeList(ch))
     except Exception:
         pass
     return node
@@ -102,7 +102,7 @@ def write_ast_text(tree, output_stem: str):
         out.append("  " * d + f"{n['name']}  «{n['text']}»")
         for c in n["children"]:
             dump(c, d+1)
-    t = _to_tree_list(tree)
+    t = toTreeList(tree)
     dump(t)
     out_path = os.path.join(current_out_dir(), f"{output_stem}.ast.txt")
     with open(out_path, "w", encoding="utf-8") as f:
@@ -112,7 +112,7 @@ def write_ast_html(tree, output_stem: str):
     """
     Escribe .ast.html
     """
-    t = _to_tree_list(tree)
+    t = toTreeList(tree)
 
     def render(n):
         title = f"{html.escape(n['name'])} <small style='color:#666'>«{html.escape(n['text'])}»</small>"

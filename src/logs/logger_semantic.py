@@ -8,9 +8,9 @@ OUT_DIR = os.path.join(BASE_DIR, "out")
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # Estado global por corrida
-_run_ts = None
-_semantic_log_path = None
-_lock = threading.Lock()
+run_ts = None
+semantic_log_path = None
+lock = threading.Lock()
 
 # Verbosidad (para no escribir cada literal/identificador si no quieres)
 VERBOSE = os.environ.get("CPS_VERBOSE", "1") not in ("0", "false", "False")
@@ -19,13 +19,13 @@ def start_run(output_stem: str):
     """
     Prepara archivo de semantic log para esta corrida.
     """
-    global _run_ts, _semantic_log_path
-    with _lock:
-        _run_ts = datetime.now()
-        _semantic_log_path = os.path.join(OUT_DIR, f"{output_stem}.semantic.log")
-        with open(_semantic_log_path, "a", encoding="utf-8") as f:
+    global run_ts, semantic_log_path
+    with lock:
+        run_ts = datetime.now()
+        semantic_log_path = os.path.join(OUT_DIR, f"{output_stem}.semantic.log")
+        with open(semantic_log_path, "a", encoding="utf-8") as f:
             f.write("\n" + "="*60 + "\n")
-            f.write(f"New semantic analysis run: {_run_ts}\n")
+            f.write(f"New semantic analysis run: {run_ts}\n")
             f.write("="*60 + "\n")
 
 def log_semantic(message: str, *, force: bool = False, new_session: bool = False):
@@ -35,7 +35,7 @@ def log_semantic(message: str, *, force: bool = False, new_session: bool = False
     - 'force' ignora VERBOSE.
     """
     # Ignoramos new_session: el encabezado ya lo escribe start_run()
-    if not _semantic_log_path:
+    if not semantic_log_path:
         # fallback legacy
         legacy = os.path.join(BASE_DIR, "semantic.log")
         with open(legacy, "a", encoding="utf-8") as f:
@@ -45,11 +45,11 @@ def log_semantic(message: str, *, force: bool = False, new_session: bool = False
     if not VERBOSE and not force:
         return
 
-    with open(_semantic_log_path, "a", encoding="utf-8") as f:
+    with open(semantic_log_path, "a", encoding="utf-8") as f:
         f.write(message + "\n")
 
 def current_out_dir():
     return OUT_DIR
 
 def current_timestamp():
-    return _run_ts
+    return run_ts
