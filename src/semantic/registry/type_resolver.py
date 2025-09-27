@@ -6,9 +6,6 @@ from semantic.errors import SemanticError
 from logs.logger_semantic import log_semantic
 
 def resolve_annotated_type(typeAnnotationCtx):
-    """
-    Igual a tu resolveAnnotatedType pero aislado aquí.
-    """
     ttxt = typeAnnotationCtx.type_().getText() if typeAnnotationCtx else None
     if ttxt is None:
         return None
@@ -40,9 +37,6 @@ def resolve_annotated_type(typeAnnotationCtx):
 
 
 def resolve_typectx(type_ctx):
-    """
-    Igual a tu _resolve_type_from_typectx
-    """
     if type_ctx is None:
         return None
 
@@ -66,9 +60,6 @@ def resolve_typectx(type_ctx):
 
 
 def validate_known_types(t, known_classes, ctx, where: str, errors_list=None):
-    """
-    Igual a tu _validate_known_types con known_classes inyectado.
-    """
     base = t
     has_array = False
     while isinstance(base, ArrayType):
