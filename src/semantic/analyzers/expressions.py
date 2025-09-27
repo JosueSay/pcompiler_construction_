@@ -1,27 +1,32 @@
 from semantic.symbol_kinds import SymbolCategory
 from semantic.validators.literal import validateLiteral
-from semantic.custom_types import ArrayType, ClassType, IntegerType, StringType, BoolType, FloatType, VoidType, NullType, ErrorType, FunctionType
-from semantic.type_system import resultArithmetic, resultModulo, resultRelational,resultEquality, resultLogical, resultUnaryMinus, resultUnaryNot
+from semantic.custom_types import (
+    ArrayType, ClassType, IntegerType, StringType, BoolType, FloatType,
+    VoidType, NullType, ErrorType, FunctionType
+)
+from semantic.type_system import (
+    resultArithmetic, resultModulo, resultRelational, resultEquality,
+    resultLogical, resultUnaryMinus, resultUnaryNot, isAssignable
+)
 from logs.logger_semantic import log_semantic
 from semantic.errors import SemanticError
-from semantic.type_system import isAssignable
 from ir.tac import Op
+
 
 class ExpressionsAnalyzer:
     def __init__(self, v, lvalues):
         self.v = v
         self.lvalues = lvalues
 
-
-        
+    # ---------- Helpers TAC ----------
     def typeToTempKind(self, t) -> str:
         if isinstance(t, BoolType): return "bool"
-        if isinstance(t, (IntegerType,)): return "int"
-        if isinstance(t, (FloatType,)): return "float"
+        if isinstance(t, IntegerType): return "int"
+        if isinstance(t, FloatType): return "float"
         if isinstance(t, (StringType, ClassType, ArrayType, FunctionType, NullType)):
             return "ref"
-        return "*" 
-    
+        return "*"
+
     def setPlace(self, node, place: str, is_temp: bool) -> None:
         try:
             setattr(node, "_place", place)
@@ -47,18 +52,14 @@ class ExpressionsAnalyzer:
             return
         kind = self.typeToTempKind(t_hint) if t_hint is not None else "*"
         self.v.emitter.temp_pool.free(place, kind)
-        
+
     def deepPlace(self, node) -> tuple[str | None, bool]:
-        """
-        Busca en profundidad (sin visitar) el primer hijo que tenga _place.
-        Devuelve (place, is_temp). Si no encuentra, (None, False).
-        """
+        """Busca recursivamente un _place ya calculado en hijos (sin volver a visitar)."""
         if node is None:
             return None, False
         p = getattr(node, "_place", None)
         if p is not None:
             return p, bool(getattr(node, "_is_temp", False))
-        # recorrer hijos sin visitar (para no reemitir)
         try:
             n = node.getChildCount()
         except Exception:
@@ -70,15 +71,12 @@ class ExpressionsAnalyzer:
                 return p2, it2
         return None, False
 
+    # ---------- Entradas de dispatch envoltorio ----------
     def visitExpression(self, ctx):
-        """
-        visita SOLO el primer hijo y copia su _place.
-        """
         if ctx.getChildCount() == 0:
             return None
         child = ctx.getChild(0)
-        t = self.v.visit(child)  # una sola visita
-        # propagar _place del hijo
+        t = self.v.visit(child)
         p = getattr(child, "_place", None)
         if p is None:
             p, it = self.deepPlace(child)
@@ -92,7 +90,7 @@ class ExpressionsAnalyzer:
         if ctx.getChildCount() == 0:
             return None
         child = ctx.getChild(0)
-        t = self.v.visit(child)  # una sola visita
+        t = self.v.visit(child)
         p = getattr(child, "_place", None)
         if p is None:
             p, it = self.deepPlace(child)
@@ -102,18 +100,16 @@ class ExpressionsAnalyzer:
             self.setPlace(ctx, p, it)
         return t
 
-        
+    # ---------- Primarios ----------
     def visitPrimaryExpr(self, ctx):
-        # primaryExpr: literalExpr | leftHandSide | '(' expression ')'
+        # literalExpr | leftHandSide | '(' expression ')'
         if hasattr(ctx, "literalExpr") and ctx.literalExpr() is not None:
             return self.v.visit(ctx.literalExpr())
         if hasattr(ctx, "leftHandSide") and ctx.leftHandSide() is not None:
-            # lvalue también puede actuar como rvalue -> LValues emite lecturas
             return self.v.visit(ctx.leftHandSide())
-        # Paréntesis
+        # Paréntesis: propagar place del hijo
         if ctx.getChildCount() == 3 and ctx.getChild(0).getText() == '(':
             t = self.v.visit(ctx.expression())
-            # Propagar place del hijo hacia este nodo
             ch = ctx.expression()
             p = self.getPlace(ch)
             if p is not None:
@@ -121,15 +117,14 @@ class ExpressionsAnalyzer:
             return t
         return self.v.visitChildren(ctx)
 
-    # Literales y primarios
+    # Literales e identificadores
     def visitLiteralExpr(self, ctx):
         if hasattr(ctx, "arrayLiteral") and ctx.arrayLiteral() is not None:
             return self.visitArrayLiteral(ctx.arrayLiteral())
         value = ctx.getText()
         log_semantic(f"Literal detected: {value}")
         t = validateLiteral(value, self.v.errors, ctx)
-
-        self.setPlace(ctx, value, False) # El literal es su propio place textual
+        self.setPlace(ctx, value, False)
         return t
 
     def visitIdentifierExpr(self, ctx):
@@ -144,24 +139,23 @@ class ExpressionsAnalyzer:
 
         if sym.category == SymbolCategory.FUNCTION:
             rtype = sym.return_type if sym.return_type is not None else VoidType()
-            # Como expresión, el identificador de función produce un FunctionType
             ftype = FunctionType(sym.param_types, rtype)
             # place textual: nombre de la función (no se llama aquí)
             self.setPlace(ctx, name, False)
             return ftype
 
-        # si estamos dentro de una función, y el símbolo pertenece a un scope externo (scope_id más bajo) => capturado.
+        # Captura de variables externas si estamos dentro de una función
         if self.v.fn_ctx_stack:
             curr_fn_ctx = self.v.fn_ctx_stack[-1]
             curr_fn_scope_id = curr_fn_ctx["scope_id"]
-            if sym.scope_id < curr_fn_scope_id: # guardar (name, type_str, scope_id_original)
+            if sym.scope_id < curr_fn_scope_id:
                 try:
                     tstr = str(sym.type)
                 except Exception:
                     tstr = "<type>"
                 curr_fn_ctx["captures"].add((sym.name, tstr, sym.scope_id))
 
-        self.setPlace(ctx, name, False) # Identificador como valor: place = nombre
+        self.setPlace(ctx, name, False)
         return sym.type
 
     def visitArrayLiteral(self, ctx):
@@ -207,20 +201,15 @@ class ExpressionsAnalyzer:
                 "'this' solo puede usarse dentro de métodos de clase.",
                 line=ctx.start.line, column=ctx.start.column))
             return ErrorType()
-        # `this` actúa como identificador disponible en el marco actual
         self.setPlace(ctx, "this", False)
         return ClassType(self.v.class_stack[-1])
 
-
-
-    # Operadores
-
+    # ---------- Operadores con emisión TAC ----------
     def visitAdditiveExpr(self, ctx):
         children = list(ctx.getChildren())
         if not children:
             return None
 
-        # primer operando
         left_type = self.v.visit(children[0])
         left_node = children[0]
         left_place = self.getPlace(left_node) or left_node.getText()
@@ -243,18 +232,16 @@ class ExpressionsAnalyzer:
                     line=ctx.start.line, column=ctx.start.column))
                 current_type = ErrorType()
             else:
-                tname = self.typeToTempKind(res_type)
-                t = self.v.emitter.temp_pool.newTemp(tname)
+                t = self.v.emitter.temp_pool.newTemp(self.typeToTempKind(res_type))
                 self.v.emitter.emit(Op.BINARY, arg1=current_place, arg2=right_place, res=t, label=op_txt)
-                # liberar hijos si eran temporales
                 self.freeIfTemp(current_node, current_type)
                 self.freeIfTemp(right_node, right_type)
                 current_place = t
-                current_node = ctx  # el resultado "cuelga" de este nodo
+                current_node = ctx
                 current_type = res_type
             i += 2
 
-        self.setPlace(ctx, current_place, current_place.startswith("t"))
+        self.setPlace(ctx, current_place, str(current_place).startswith("t"))
         return current_type
 
     def visitMultiplicativeExpr(self, ctx):
@@ -277,10 +264,7 @@ class ExpressionsAnalyzer:
             right_type = self.v.visit(right_node)
             right_place = self.getPlace(right_node) or right_node.getText()
 
-            if op_txt == '%':
-                res_type = resultModulo(current_type, right_type)
-            else:
-                res_type = resultArithmetic(current_type, right_type, op_txt)
+            res_type = resultModulo(current_type, right_type) if op_txt == '%' else resultArithmetic(current_type, right_type, op_txt)
 
             if isinstance(res_type, ErrorType):
                 self.v.appendErr(SemanticError(
@@ -288,8 +272,7 @@ class ExpressionsAnalyzer:
                     line=ctx.start.line, column=ctx.start.column))
                 current_type = ErrorType()
             else:
-                tname = self.typeToTempKind(res_type)
-                t = self.v.emitter.temp_pool.newTemp(tname)
+                t = self.v.emitter.temp_pool.newTemp(self.typeToTempKind(res_type))
                 self.v.emitter.emit(Op.BINARY, arg1=current_place, arg2=right_place, res=t, label=op_txt)
                 self.freeIfTemp(current_node, current_type)
                 self.freeIfTemp(right_node, right_type)
@@ -298,7 +281,7 @@ class ExpressionsAnalyzer:
                 current_type = res_type
             i += 2
 
-        self.setPlace(ctx, current_place, current_place.startswith("t"))
+        self.setPlace(ctx, current_place, str(current_place).startswith("t"))
         return current_type
 
     def visitRelationalExpr(self, ctx):
@@ -331,7 +314,6 @@ class ExpressionsAnalyzer:
                 final_type = ErrorType()
                 final_place = last_place
             else:
-                # Valor booleano 0/1
                 t = self.v.emitter.temp_pool.newTemp(self.typeToTempKind(res))
                 self.v.emitter.emit(Op.BINARY, arg1=last_place, arg2=right_place, res=t, label=op_txt)
                 self.freeIfTemp(last_node, last_type)
@@ -343,7 +325,7 @@ class ExpressionsAnalyzer:
             last_place = right_place
             i += 2
 
-        self.setPlace(ctx, final_place, final_place.startswith("t"))
+        self.setPlace(ctx, final_place, str(final_place).startswith("t"))
         return final_type if final_type is not None else last_type
 
     def visitEqualityExpr(self, ctx):
@@ -387,7 +369,7 @@ class ExpressionsAnalyzer:
             last_place = right_place
             i += 2
 
-        self.setPlace(ctx, final_place, final_place.startswith("t"))
+        self.setPlace(ctx, final_place, str(final_place).startswith("t"))
         return final_type if final_type is not None else last_type
 
     def visitLogicalAndExpr(self, ctx):
@@ -425,7 +407,7 @@ class ExpressionsAnalyzer:
                 current_type = res
             i += 2
 
-        self.setPlace(ctx, current_place, current_place.startswith("t"))
+        self.setPlace(ctx, current_place, str(current_place).startswith("t"))
         return current_type
 
     def visitLogicalOrExpr(self, ctx):
@@ -463,7 +445,7 @@ class ExpressionsAnalyzer:
                 current_type = res
             i += 2
 
-        self.setPlace(ctx, current_place, current_place.startswith("t"))
+        self.setPlace(ctx, current_place, str(current_place).startswith("t"))
         return current_type
 
     def visitUnaryExpr(self, ctx):
@@ -501,30 +483,30 @@ class ExpressionsAnalyzer:
 
             return ErrorType()
         else:
-            # primary
             t = self.v.visit(ctx.primaryExpr())
             p = self.getPlace(ctx.primaryExpr())
             if p is not None:
                 self.setPlace(ctx, p, self.isTempNode(ctx.primaryExpr()))
             return t
 
-
-    # Objetos / new / propiedad
-
+    # ---------- Objetos / propiedades / new ----------
     def visitNewExpr(self, ctx):
         class_name = ctx.Identifier().getText()
 
+        # Verificación de clase
         if not self.v.class_handler.exists(class_name):
             self.v.appendErr(SemanticError(
                 f"Clase '{class_name}' no declarada.",
                 line=ctx.start.line, column=ctx.start.column))
             return ErrorType()
 
+        # Recolectar tipos de argumentos
         arg_types = []
         if ctx.arguments():
             for e in ctx.arguments().expression():
                 arg_types.append(self.v.visit(e))
 
+        # Buscar firma de constructor en la jerarquía
         found_sig = None
         seen = set()
         curr = class_name
@@ -544,7 +526,7 @@ class ExpressionsAnalyzer:
                     line=ctx.start.line, column=ctx.start.column))
         else:
             ctor_owner, (param_types, rtype) = found_sig
-            expected = len(param_types) - 1
+            expected = len(param_types) - 1  # quitar 'this'
             if len(arg_types) != expected:
                 self.v.appendErr(SemanticError(
                     f"Número de argumentos inválido para '{ctor_owner}.constructor': "
@@ -558,14 +540,16 @@ class ExpressionsAnalyzer:
                             f"no se puede asignar {at} a {pt}.",
                             line=ctx.start.line, column=ctx.start.column))
 
+        # Emisión real de new/ctor llegará en la etapa de RA; aquí solo tipo/place
         self.setPlace(ctx, f"new {class_name}()", False)
         return ClassType(class_name)
 
     def visitPropertyAccessExpr(self, ctx):
         """
         expression '.' Identifier
-        Solo semántica. La emisión de lectura de propiedades la centralizamos
-        en LValuesAnalyzer.visitLeftHandSide para no duplicar.
+        - Si es atributo: devuelve su tipo (con herencia).
+        - Si es método: devuelve FunctionType(params_sin_this, ret), buscando en la jerarquía.
+        La emisión de lectura/escritura/llamada se maneja fuera (LValues / Funcs).
         """
         obj_type = self.v.visit(ctx.expression())
 
@@ -578,14 +562,61 @@ class ExpressionsAnalyzer:
         class_name = obj_type.name
         prop_name = ctx.Identifier().getText()
 
-        prop_t = self.v.class_handler.get_attribute_type(class_name, prop_name)
-        if prop_t is None:
-            self.v.appendErr(SemanticError(
-                f"Clase '{class_name}' no tiene propiedad '{prop_name}'.",
-                line=ctx.start.line, column=ctx.start.column))
-            return ErrorType()
+        # 1) Atributo (con herencia)
+        attr_t = self.v.class_handler.get_attribute_type(class_name, prop_name)
+        if attr_t is not None:
+            return attr_t
 
-        return prop_t
+        # 2) Método en esta clase o en bases (method_registry y, como respaldo, symbol table)
+        #    Construimos FunctionType quitando 'this' del inicio si existe.
+        def _lookup_method_in_hierarchy(cls: str, mname: str):
+            # registry directo
+            sig = self.v.method_registry.lookup(f"{cls}.{mname}")
+            if sig is not None:
+                return cls, sig
+            # subir a bases
+            try:
+                curr = cls
+                seen = set()
+                while curr and curr not in seen:
+                    seen.add(curr)
+                    base = self.v.class_handler._classes.get(curr).base
+                    if not base:
+                        break
+                    sig = self.v.method_registry.lookup(f"{base}.{mname}")
+                    if sig is not None:
+                        return base, sig
+                    curr = base
+            except Exception:
+                pass
+            # respaldo: símbolo global "Clase.metodo"
+            qname = f"{cls}.{mname}"
+            sym = self.v.scopeManager.lookup(qname)
+            if sym is not None and sym.category == SymbolCategory.FUNCTION:
+                ret_t = sym.return_type if sym.return_type is not None else VoidType()
+                # param_types ya incluiría 'this' como primero
+                return cls, (sym.param_types, ret_t)
+            return None, None
+
+        owner, sig = _lookup_method_in_hierarchy(class_name, prop_name)
+        if sig is not None:
+            param_types, ret_t = sig
+            ret_t = ret_t if ret_t is not None else VoidType()
+            # quitar 'this' si viene
+            params_wo_this = param_types[1:] if len(param_types) > 0 else []
+            ftype = FunctionType(params_wo_this, ret_t)
+            try:
+                setattr(ftype, "_bound_receiver", class_name)
+                setattr(ftype, "_decl_owner", owner or class_name)
+            except Exception:
+                pass
+            return ftype
+
+        # 3) Ninguno: error
+        self.v.appendErr(SemanticError(
+            f"Miembro '{prop_name}' no declarado en clase '{class_name}'.",
+            line=ctx.start.line, column=ctx.start.column))
+        return ErrorType()
 
     def visitLeftHandSide(self, ctx):
         return self.lvalues.visitLeftHandSide(ctx)

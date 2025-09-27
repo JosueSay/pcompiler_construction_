@@ -6,21 +6,35 @@ from semantic.errors import SemanticError
 from logs.logger_semantic import log_semantic
 from ir.tac import Op
 
+
 class StatementsAnalyzer:
+    """
+    Sentencias (declaraciones, asignaciones, bloques, foreach) con:
+      - Chequeo semántico completo (como en la versión previa).
+      - Emisión TAC donde corresponde (inicializadores y asignaciones).
+      - Detección de 'código muerto' coherente con control de flujo.
+      - Limpieza de temporales por sentencia.
+    """
+
     def __init__(self, v):
         self.v = v
 
+    # ------------------------------------------------------------------
+    # Sentencia de expresión
+    # ------------------------------------------------------------------
     def visitExpressionStatement(self, ctx):
         t = self.v.visit(ctx.expression())
+        # liberar temporales creados en esta sentencia
         self.v.emitter.temp_pool.resetPerStatement()
         return t
 
+    # ------------------------------------------------------------------
+    # Bloques (con detección de código muerto)
+    # ------------------------------------------------------------------
     def visitBlock(self, ctx):
         """
-        Bloque con detección de 'código muerto':
-        - Si una sentencia termina el flujo (return/break/continue o if-else donde
-          ambas ramas terminan), se marca el resto como inalcanzable.
-        - Reportamos el diagnóstico pero seguimos visitando para no perder otros errores.
+        Si una sentencia termina el flujo (return/break/continue o if-else donde
+        ambas ramas terminan), el resto del bloque es inalcanzable (se reporta).
         """
         self.v.scopeManager.enterScope()
 
@@ -28,10 +42,9 @@ class StatementsAnalyzer:
         terminator_reason = None
 
         for st in ctx.statement():
-            # Si ya sabemos que el flujo terminó antes de esta sentencia => dead code
             if terminated_in_block:
-                
-                try:# línea/col seguras si el nodo tiene 'start'
+                # Reportar dead code pero seguir visitando para recolectar errores
+                try:
                     line = st.start.line
                     col = st.start.column
                 except Exception:
@@ -40,18 +53,17 @@ class StatementsAnalyzer:
                 self.v.appendErr(SemanticError(
                     f"Código inalcanzable: el flujo terminó por '{terminator_reason}' antes de esta sentencia.",
                     line=line, column=col, error_type="DeadCode"))
-                # Aún así, visitamos para seguir chequeando tipos/errores
                 self.v.visit(st)
                 continue
 
-            # Reiniciar el flag que marcan las sentencias terminantes
+            # Reset de flags de terminación por sentencia
             self.v.stmt_just_terminated = None
             self.v.stmt_just_terminator_node = None
 
-            # Visitar sentencia normalmente
-            result = self.v.visit(st)
+            # Visitar sentencia
+            self.v.visit(st)
 
-            # ¿La sentencia que acabamos de visitar terminó el flujo?
+            # ¿Terminó el flujo?
             if self.v.stmt_just_terminated:
                 terminated_in_block = True
                 terminator_reason = self.v.stmt_just_terminated
@@ -59,32 +71,17 @@ class StatementsAnalyzer:
         size = self.v.scopeManager.exitScope()
         log_semantic(f"[scope] bloque cerrado; frame_size={size} bytes")
 
-        # Devolvemos un pequeño resultado para que estructuras como if/else
-        return {
-            "terminated": terminated_in_block,
-            "reason": terminator_reason
-        }
+        return {"terminated": terminated_in_block, "reason": terminator_reason}
 
+    # ------------------------------------------------------------------
+    # Declaraciones: let / const (con emisión TAC para inicializadores)
+    # ------------------------------------------------------------------
     def visitVariableDeclaration(self, ctx):
         """
-        Declara variables con **init opcional**.
-
-        Reglas:
-        - Debe existir anotación de tipo (no hay inferencia).
-        - `void` no es válido como tipo de variable.
-        - Si NO hay inicializador:
-            * Tipos de **referencia** (clase / arreglos / function): se inicializan a **null**
-            (initialized=True, init_value_type=NullType, init_note="default-null").
-            * Tipos **valor** (integer, boolean, string): se permiten **sin inicializar**
-            (initialized=False, init_value_type=None, init_note="uninitialized").
-            > Nota: El uso previo a asignación deberá marcarse como error en el visit de identificadores.
-        - Si hay inicializador:
-            * Se valida asignabilidad `declared_type ← rhs_type`.
-            * Se marca initialized=True, con `init_value_type=rhs_type`.
-
-        Además:
-        - Se registra el símbolo en la tabla (o error si hay colisión).
-        - Si estamos dentro de una **clase**, se registra el **atributo** con su tipo declarado.
+        let <id>: <type> [= expr]? ;
+        - Reglas semánticas (tipos, asignabilidad, init opcional).
+        - Atributo de clase si estamos dentro de class.
+        - TAC: si hay init ->  id = <expr.place>
         """
         name = ctx.Identifier().getText()
         ann = ctx.typeAnnotation()
@@ -113,20 +110,18 @@ class StatementsAnalyzer:
         init_value_type = None
         init_note = None
 
-        # --- Sin inicializador: permitir declaración laxa ---
+        # Sin inicializador
         if not init:
             if isReferenceType(declared_type):
-                # Referencias: default a null
                 initialized = True
                 init_value_type = NullType()
                 init_note = "default-null"
             else:
-                # Tipos valor: permitido sin inicializar
                 initialized = False
                 init_value_type = None
                 init_note = "uninitialized"
         else:
-            # --- Con inicializador: validar asignabilidad ---
+            # Con inicializador
             rhs_type = self.v.visit(init.expression())
             if rhs_type is None:
                 self.v.emitter.temp_pool.resetPerStatement()
@@ -146,7 +141,7 @@ class StatementsAnalyzer:
             init_value_type = rhs_type
             init_note = "explicit"
 
-        # --- Declarar símbolo ---
+        # Declarar símbolo
         try:
             sym = self.v.scopeManager.addSymbol(
                 name, declared_type, category=SymbolCategory.VARIABLE,
@@ -163,23 +158,27 @@ class StatementsAnalyzer:
             self.v.emitter.temp_pool.resetPerStatement()
             return
 
-        # --- Atributo de clase (si aplica) ---
+        # Registrar atributo de clase (si procede)
         if self.v.class_stack:
             current_class = self.v.class_stack[-1]
             self.v.class_handler.add_attribute(current_class, name, declared_type)
             log_semantic(f"[class.attr] {current_class}.{name}: {declared_type}")
-        
-        # --- Emisión TAC del inicializador ---
+
+        # TAC del inicializador
         if init is not None:
             p, _ = self.v.exprs.deepPlace(init.expression())
             rhs_place = p or init.expression().getText()
             self.v.emitter.emit(Op.ASSIGN, arg1=rhs_place, res=name)
 
-        # Reinicio de temporales por sentencia
+        # Limpiar temporales por sentencia
         self.v.emitter.temp_pool.resetPerStatement()
 
-
     def visitConstantDeclaration(self, ctx):
+        """
+        const <id>: <type> = expr ;
+        - Tipo obligatorio + expr obligatoria + asignabilidad.
+        - TAC: id = <expr.place>
+        """
         name = ctx.Identifier().getText() if ctx.Identifier() else "<unnamed-const>"
         ann = ctx.typeAnnotation()
         expr_ctx = ctx.expression()
@@ -229,27 +228,27 @@ class StatementsAnalyzer:
             self.v.appendErr(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
             self.v.emitter.temp_pool.resetPerStatement()
             return
-        
-        # Emisión TAC: k = <expr.place>
+
+        # TAC
         p, _ = self.v.exprs.deepPlace(expr_ctx)
         rhs_place = p or expr_ctx.getText()
         self.v.emitter.emit(Op.ASSIGN, arg1=rhs_place, res=name)
 
-
-
-        # Reinicio de temporales por sentencia
         self.v.emitter.temp_pool.resetPerStatement()
 
+    # ------------------------------------------------------------------
+    # Asignaciones: var = expr  |  obj.prop = expr
+    # ------------------------------------------------------------------
     def visitAssignment(self, ctx):
         """
         Soporta:
-        1) Identifier '=' expression ';'
-        2) expression '.' Identifier '=' expression ';'   (asignación a propiedad)
+          1) Identifier '=' expression ';'
+          2) expression '.' Identifier '=' expression ';'   (asignación a propiedad)
         """
         exprs = list(ctx.expression())
         n = len(exprs)
 
-        # Caso 1: asignación a variable simple
+        # (1) variable simple
         if n == 1 and ctx.Identifier() is not None:
             name = ctx.Identifier().getText()
             sym = self.v.scopeManager.lookup(name)
@@ -277,15 +276,14 @@ class StatementsAnalyzer:
                 self.v.emitter.temp_pool.resetPerStatement()
                 return
 
-            # TAC: name = <expr.place>
+            # TAC
             p, _ = self.v.exprs.deepPlace(exprs[0])
             rhs_place = p or exprs[0].getText()
             self.v.emitter.emit(Op.ASSIGN, arg1=rhs_place, res=name)
             self.v.emitter.temp_pool.resetPerStatement()
             return
 
-
-        # Caso 2: obj.prop = expr
+        # (2) propiedad: obj.prop = expr
         if n == 2:
             lhs_obj = exprs[0]
             rhs_exp = exprs[1]
@@ -330,13 +328,15 @@ class StatementsAnalyzer:
             self.v.emitter.temp_pool.resetPerStatement()
             return
 
-
         # Fallback
         self.v.appendErr(SemanticError(
             "Asignación aún no soportada en esta forma por la fase actual.",
             line=ctx.start.line, column=ctx.start.column))
         self.v.emitter.temp_pool.resetPerStatement()
 
+    # ------------------------------------------------------------------
+    # foreach (semántica + scope)
+    # ------------------------------------------------------------------
     def visitForeachStatement(self, ctx):
         iter_name = ctx.Identifier().getText()
         iter_expr_type = self.v.visit(ctx.expression())
@@ -360,6 +360,8 @@ class StatementsAnalyzer:
         except Exception as e:
             self.v.appendErr(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
 
+        # El cuerpo es un bloque; su terminación no implica que el foreach
+        # termine el flujo en el bloque externo.
         self.v.visit(ctx.block())
         size = self.v.scopeManager.exitScope()
         log_semantic(f"[scope] foreach cerrado; frame_size={size} bytes")
