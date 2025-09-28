@@ -120,7 +120,10 @@ class FunctionsAnalyzer:
         self.v.stmt_just_terminator_node = None
 
         # ---- Visitar cuerpo ----
+        prev_fn_body_ctx = getattr(self.v, "_fn_body_block_ctx", None)
+        self.v._fn_body_block_ctx = ctx.block()
         block_result = self.v.visit(ctx.block())
+        self.v._fn_body_block_ctx = prev_fn_body_ctx
         
         # si es void y no terminó por return/break total, emite return implícito
         if isinstance(expected_r, VoidType) and (not block_result or not block_result.get("terminated")):

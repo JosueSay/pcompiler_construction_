@@ -138,11 +138,48 @@ class ExpressionsAnalyzer:
             return ErrorType()
 
         if sym.category == SymbolCategory.FUNCTION:
+            # Tipo de función (para el sistema de tipos)
             rtype = sym.return_type if sym.return_type is not None else VoidType()
             ftype = FunctionType(sym.param_types, rtype)
-            # place textual: nombre de la función (no se llama aquí)
+
+            # Guardamos el label para llamadas directas si aplica
+            try:
+                setattr(ftype, "_label", getattr(sym, "label", None) or f"f_{sym.name}")
+            except Exception:
+                pass
+
+            # ¿Esta función necesita closure? (tiene capturas reales)
+            captured = []
+            try:
+                cap_info = getattr(sym, "captures", None)
+                if cap_info and getattr(cap_info, "captured", None):
+                    captured = [n for (n, _t, _sid) in cap_info.captured]
+            except Exception:
+                captured = []
+
+            if captured:
+                # Materializamos la closure: ENV = mkenv(x,y,...) ; C = mkclos f_label, ENV
+                # 1) construir lista textual de lugares para las capturas (por ahora, por nombre)
+                args_txt = ",".join(captured) if captured else ""
+                env_t = self.v.emitter.temp_pool.newTemp("ref")
+                self.v.emitter.emit(Op.MKENV, arg1=args_txt, res=env_t)
+
+                clos_t = self.v.emitter.temp_pool.newTemp("ref")
+                f_label = getattr(ftype, "_label", f"f_{sym.name}")
+                self.v.emitter.emit(Op.MKCLOS, arg1=f_label, arg2=env_t, res=clos_t)
+
+                # El identificador produce una *closure value*
+                self.setPlace(ctx, clos_t, True)
+                try:
+                    setattr(ftype, "_closure_place", clos_t)  # marcador para callc
+                except Exception:
+                    pass
+                return ftype
+
+            # Si no hay capturas, el identificador queda como nombre (llamada directa con CALL)
             self.setPlace(ctx, name, False)
             return ftype
+
 
         # Captura de variables externas si estamos dentro de una función
         if self.v.fn_ctx_stack:

@@ -178,10 +178,36 @@ class LValuesAnalyzer:
                         self.v.emitter.temp_pool.free(aplace, "*")
                     n_params += 1
 
+                # === ¿Es una closure? ===
+                clos_place = getattr(base_type, "_closure_place", None)
 
+                if clos_place:
+                    # Llamada a *closure*: callc <closure>, n
+                    ret_t = base_type.return_type
+                    if isinstance(ret_t, VoidType):
+                        self.v.emitter.emit(Op.CALLC, arg1=clos_place, arg2=str(n_params))
+                        base_place = ""   # nada que encadenar
+                        self.setPlace(suf, "", False)
+                        base_type = ret_t
+                    else:
+                        t = self.v.emitter.temp_pool.newTemp(self.v.exprs.typeToTempKind(ret_t))
+                        self.v.emitter.emit(Op.CALLC, arg1=clos_place, arg2=str(n_params), res=t)
+                        base_place = t
+                        base_type  = ret_t
+                        self.setPlace(suf, t, True)
+
+                    # liberar closure temp si fue temporal
+                    if isinstance(clos_place, str) and clos_place.startswith("t"):
+                        self.v.emitter.temp_pool.free(clos_place, "*")
+
+                    # liberar 'this' implícito si fue temporal
+                    if recv_place and isinstance(recv_place, str) and recv_place.startswith("t"):
+                        self.v.emitter.temp_pool.free(recv_place, "*")
+                    continue
+
+                # === Llamada *directa* a función (sin closure) ===
                 # 3) label de funciones libres si no lo tenemos
                 if f_label is None:
-                    # base de llamada es un identificador de función (place textual del primario)
                     base_name = getattr(ctx.primaryAtom(), "_place", None) or ctx.primaryAtom().getText()
                     fsym = self.v.scopeManager.lookup(base_name)
                     f_label = getattr(fsym, "label", None) or f"f_{base_name}"
@@ -190,8 +216,7 @@ class LValuesAnalyzer:
                 ret_t = base_type.return_type
                 if isinstance(ret_t, VoidType):
                     self.v.emitter.emit(Op.CALL, arg1=f_label, arg2=str(n_params))
-                    # una llamada void no produce valor utilizable para encadenar
-                    base_place = ""   # no se usa
+                    base_place = ""
                     self.setPlace(suf, "", False)
                     base_type = ret_t
                 else:
@@ -200,9 +225,12 @@ class LValuesAnalyzer:
                     base_place = t
                     base_type  = ret_t
                     self.setPlace(suf, t, True)
+
+                # liberar 'this' implícito si fue temporal
                 if recv_place and isinstance(recv_place, str) and recv_place.startswith("t"):
                     self.v.emitter.temp_pool.free(recv_place, "*")
                 continue
+
 
             # --- acceso a propiedad/método: expr.Identifier ---
             if isinstance(suf, CompiscriptParser.PropertyAccessExprContext):

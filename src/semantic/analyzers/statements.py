@@ -36,7 +36,9 @@ class StatementsAnalyzer:
         Si una sentencia termina el flujo (return/break/continue o if-else donde
         ambas ramas terminan), el resto del bloque es inalcanzable (se reporta).
         """
-        self.v.scopeManager.enterScope()
+        is_fn_body = (getattr(self.v, "_fn_body_block_ctx", None) is ctx)
+        if not is_fn_body:
+            self.v.scopeManager.enterScope()
 
         terminated_in_block = False
         terminator_reason = None
@@ -68,8 +70,9 @@ class StatementsAnalyzer:
                 terminated_in_block = True
                 terminator_reason = self.v.stmt_just_terminated
 
-        size = self.v.scopeManager.exitScope()
-        log_semantic(f"[scope] bloque cerrado; frame_size={size} bytes")
+        if not is_fn_body:
+            size = self.v.scopeManager.exitScope()
+            log_semantic(f"[scope] bloque cerrado; frame_size={size} bytes")
 
         return {"terminated": terminated_in_block, "reason": terminator_reason}
 

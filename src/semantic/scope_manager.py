@@ -68,7 +68,7 @@ class ScopeManager:
         if name in self.scopes[-1]:
             raise Exception(f"Símbolo '{name}' ya declarado en este ámbito.")
 
-        width = getTypeWidth(type_)
+        width = 0 if category == SymbolCategory.FUNCTION else getTypeWidth(type_)
         offset = self.offsets[-1]
         storage = self.currentStorage()
         is_ref = isReferenceType(type_)
