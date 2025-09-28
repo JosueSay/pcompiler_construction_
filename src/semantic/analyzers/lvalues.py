@@ -46,6 +46,7 @@ class LValuesAnalyzer:
 
     def visitLeftHandSide(self, ctx: CompiscriptParser.LeftHandSideContext):
         # Evaluar el receptor base (primaryAtom)
+        log_semantic(f"[lvalue] enter LHS: '{ctx.getText()}'")
         base_type = self.v.visit(ctx.primaryAtom())
         base_node = ctx.primaryAtom()
         base_place = self.getPlace(base_node) or base_node.getText()

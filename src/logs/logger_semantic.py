@@ -14,6 +14,17 @@ run_out_dir = None
 lock = threading.Lock()
 VERBOSE = os.environ.get("CPS_VERBOSE", "1") not in ("0", "false", "False")
 
+def log_function(func):
+    """Decorador para loguear entrada y salida de funciones."""
+    def wrapper(*args, **kwargs):
+        name = func.__name__
+        log_semantic(f"\n[enter] {name}")
+        result = func(*args, **kwargs)
+        log_semantic(f"[exit] {name}\n")
+        return result
+    return wrapper
+
+
 def start_run(output_stem: str):
     """
     Prepara archivo de semantic log para esta corrida.

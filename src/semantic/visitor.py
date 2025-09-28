@@ -1,6 +1,6 @@
 from antlr_gen.CompiscriptVisitor import CompiscriptVisitor
 from antlr_gen.CompiscriptParser import CompiscriptParser
-from logs.logger_semantic import log_semantic
+from logs.logger_semantic import log_semantic, log_function
 
 from semantic.scope_manager import ScopeManager
 from semantic.diagnostics import Diagnostics
@@ -22,13 +22,15 @@ from semantic.analyzers.controlFlow import ControlFlowAnalyzer
 from semantic.errors import SemanticError
 
 class VisitorCPS(CompiscriptVisitor):
+
+    @log_function
     def __init__(self, emitter: Emitter | None = None):
+        log_semantic("===== [VisitorCPS.py] Inicio =====")
         self.errors = []
         self.diag = Diagnostics()
         self.scopeManager = ScopeManager()
         self.method_registry = MethodRegistry()
         self.class_handler = ClassHandler()
-        
         self.emitter: Emitter = emitter or Emitter()
 
         self.known_classes = set()
@@ -38,9 +40,9 @@ class VisitorCPS(CompiscriptVisitor):
         self.fn_ctx_stack = []
         self.loop_depth = 0
 
-        # Flags internos para detección de terminación por sentencia
-        self.stmt_just_terminated = None        # "return" | "break" | "continue" | "if-else" | None
-        self.stmt_just_terminator_node = None   # nodo ANTLR de la sentencia terminante (opcional)
+        # Flags internos
+        self.stmt_just_terminated = None
+        self.stmt_just_terminator_node = None
 
         self.lvals = LValuesAnalyzer(self)
         self.exprs = ExpressionsAnalyzer(self, self.lvals)
@@ -50,14 +52,21 @@ class VisitorCPS(CompiscriptVisitor):
         self.returns = ReturnsAnalyzer(self)
         self.ctrl = ControlFlowAnalyzer(self)
 
-        log_semantic("")
+        log_semantic(f"__init__ -> Visitor inicializado, emitter={self.emitter}")        
 
+    @log_function
     def appendErr(self, err):
+        log_semantic(f"[VisitorCPS.py] appendErr -> err={err}")
         self.errors.append(err)
-        return self.diag.extend(err)
+        result = self.diag.extend(err)
+        log_semantic(f"[VisitorCPS.py] appendErr -> errors_totales={len(self.errors)}")
+        return result
 
+    @log_function
     def visitProgram(self, ctx: CompiscriptParser.ProgramContext):
-        # --- Pre-scan: registrar nombres de clases (y base, si existe) ---
+        log_semantic("===== [VisitorCPS.py] visitProgram =====")
+        
+        # --- Pre-scan: registrar nombres de clases ---
         for st in ctx.statement():
             cd = st.classDeclaration() if hasattr(st, "classDeclaration") else None
             if cd:
@@ -83,8 +92,10 @@ class VisitorCPS(CompiscriptVisitor):
 
         # --- Recorrido normal ---
         for stmt in ctx.statement():
+            log_semantic(f"[visitProgram] visitando statement: {stmt.getText()}")
             self.visit(stmt)
 
+        # --- Reporte de errores ---
         if self.errors:
             log_semantic("Semantic Errors:")
             for error in self.errors:
@@ -92,6 +103,7 @@ class VisitorCPS(CompiscriptVisitor):
         else:
             log_semantic("Type checking passed.")
 
+        # --- Reporte de símbolos ---
         log_semantic("Símbolos declarados:")
         for sym in self.scopeManager.allSymbols():
             init_info = (
