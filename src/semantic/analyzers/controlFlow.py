@@ -308,23 +308,36 @@ class ControlFlowAnalyzer:
 
         self.visitCond(cond, lthen, lelse)
 
+        # then
         self.v.emitter.emitLabel(lthen)
         then_result = self.v.visit(then_stmt) or {"terminated": False, "reason": None}
 
+        # else (si existe)
         if else_stmt is not None:
+            # si el 'then' no terminó, emitimos el salto al 'end'
             self.v.emitter.emitGoto(lend)
-            self.v.emitter.emitLabel(lelse)
-            self.v.emitter.clearFlowTermination()
-            else_result = self.v.visit(else_stmt) or {"terminated": False, "reason": None}
 
+            # etiqueta de 'else' SIEMPRE se emite (LABEL atraviesa la barrera)
+            self.v.emitter.emitLabel(lelse)
+
+            # CAMBIO: limpiar barrera SÓLO si el 'then' terminó (para poder emitir el 'else')
+            if bool(then_result.get("terminated")):
+                self.v.emitter.clearFlowTermination()
+
+            else_result = self.v.visit(else_stmt) or {"terminated": False, "reason": None}
         else:
             else_result = {"terminated": False, "reason": None}
 
+        # end
         self.v.emitter.emitLabel(lend)
-        self.v.emitter.clearFlowTermination() 
 
         # Terminación si ambas ramas terminan
         both_terminate = bool(then_result.get("terminated") and else_result.get("terminated"))
+
+        # CAMBIO: en 'end' limpiar barrera solo si NO terminan ambas ramas
+        if not both_terminate:
+            self.v.emitter.clearFlowTermination()
+
         if both_terminate:
             self.v.stmt_just_terminated = "if-else"
             self.v.stmt_just_terminator_node = ctx
@@ -334,6 +347,7 @@ class ControlFlowAnalyzer:
         self.v.stmt_just_terminated = None
         self.v.stmt_just_terminator_node = None
         return {"terminated": False, "reason": None}
+
 
     # ---------- WHILE ----------
     def visitWhileStatement(self, ctx: CompiscriptParser.WhileStatementContext):
@@ -648,6 +662,7 @@ class ControlFlowAnalyzer:
 
         # TAC
         self.v.emitter.emitGoto(target)
+        self.v.emitter.markFlowTerminated()
         # Marca terminación del flujo del bloque actual
         self.v.stmt_just_terminated = "break"
         self.v.stmt_just_terminator_node = ctx
@@ -664,6 +679,7 @@ class ControlFlowAnalyzer:
 
         # TAC
         self.v.emitter.emitGoto(target)
+        self.v.emitter.markFlowTerminated()
         # Marca terminación del flujo del bloque actual
         self.v.stmt_just_terminated = "continue"
         self.v.stmt_just_terminator_node = ctx

@@ -55,6 +55,10 @@ class StatementsAnalyzer:
                 self.v.appendErr(SemanticError(
                     f"Código inalcanzable: el flujo terminó por '{terminator_reason}' antes de esta sentencia.",
                     line=line, column=col, error_type="DeadCode"))
+
+                # activar barrera de emisión en este tramo muerto ===
+                self.v.emitter.markFlowTerminated()
+
                 self.v.visit(st)
                 continue
 
