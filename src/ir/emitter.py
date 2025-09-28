@@ -76,14 +76,34 @@ class Emitter:
         self.emit(Op.UNARY, arg1=value, res=dst, label=op_text)
 
     # ------------- RA helpers ----------------------
-
-    def beginFunction(self, func_label: str, local_frame_size: int) -> None:
+    
+    def beginFunction(self, func_label: str, local_frame_size: int | None) -> None:
+        """
+        Abre un nuevo contexto de función:
+        - resetea el pool de temporales por función
+        - limpia cualquier barrera de flujo (por returns previos)
+        - emite la etiqueta y el prólogo lógico 'enter'
+        """
+        # Aislar temporales por función
         self.temp_pool.resetPerFunction()
+        # Asegurar que no hay barrera activada al entrar
+        self.clearFlowTermination()
+        # Etiqueta de entrada
         self.emitLabel(func_label)
-        self.quads.append(ActivationRecordTools.emitEnter(func_label, local_frame_size))
+        # Prológo lógico (usa 0 si aún no sabemos el frame real)
+        size_text = str(local_frame_size if local_frame_size is not None else 0)
+        self.emit(Op.ENTER, arg1=func_label, arg2=size_text)
 
-    def endFunctionWithReturn(self, value: str | None = None) -> None:
-        self.quads.append(ActivationRecordTools.emitReturn(value))
+    def endFunctionWithReturn(self, value_place: str | None = None) -> None:
+        """
+        Emite 'return' (con o sin valor) y activa barrera de emisión
+        para suprimir cualquier 3AC posterior en el mismo bloque.
+        """
+        if value_place is not None and value_place != "":
+            self.emit(Op.RETURN, arg1=value_place)
+        else:
+            self.emit(Op.RETURN)
+        # Cerrar flujo del bloque actual
         self.markFlowTerminated()
 
     # ------------- Serialización -------------------
