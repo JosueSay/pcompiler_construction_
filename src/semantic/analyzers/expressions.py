@@ -212,7 +212,8 @@ class ExpressionsAnalyzer:
 
         left_type = self.v.visit(children[0])
         left_node = children[0]
-        left_place = self.getPlace(left_node) or left_node.getText()
+        # left_place = self.getPlace(left_node) or left_node.getText()
+        left_place  = self.getPlace(left_node)  or self.deepPlace(left_node)[0]  or left_node.getText()
 
         i = 1
         current_type = left_type
@@ -223,7 +224,8 @@ class ExpressionsAnalyzer:
             op_txt = children[i].getText()
             right_node = children[i + 1]
             right_type = self.v.visit(right_node)
-            right_place = self.getPlace(right_node) or right_node.getText()
+            # right_place = self.getPlace(right_node) or right_node.getText()
+            right_place = self.getPlace(right_node) or self.deepPlace(right_node)[0] or right_node.getText()
 
             res_type = resultArithmetic(current_type, right_type, op_txt) if op_txt != '%' else resultModulo(current_type, right_type)
             if isinstance(res_type, ErrorType):
@@ -251,7 +253,8 @@ class ExpressionsAnalyzer:
 
         left_type = self.v.visit(children[0])
         left_node = children[0]
-        left_place = self.getPlace(left_node) or left_node.getText()
+        # left_place = self.getPlace(left_node) or left_node.getText()
+        left_place  = self.getPlace(left_node)  or self.deepPlace(left_node)[0]  or left_node.getText()
 
         i = 1
         current_type = left_type
@@ -262,7 +265,8 @@ class ExpressionsAnalyzer:
             op_txt = children[i].getText()
             right_node = children[i + 1]
             right_type = self.v.visit(right_node)
-            right_place = self.getPlace(right_node) or right_node.getText()
+            # right_place = self.getPlace(right_node) or right_node.getText()
+            right_place = self.getPlace(right_node) or self.deepPlace(right_node)[0] or right_node.getText()
 
             res_type = resultModulo(current_type, right_type) if op_txt == '%' else resultArithmetic(current_type, right_type, op_txt)
 
@@ -291,7 +295,8 @@ class ExpressionsAnalyzer:
 
         left_node = children[0]
         left_type = self.v.visit(left_node)
-        left_place = self.getPlace(left_node) or left_node.getText()
+        # left_place = self.getPlace(left_node) or left_node.getText()
+        left_place  = self.getPlace(left_node)  or self.deepPlace(left_node)[0]  or left_node.getText()
 
         i = 1
         last_type = left_type
@@ -304,7 +309,8 @@ class ExpressionsAnalyzer:
             op_txt = children[i].getText()
             right_node = children[i + 1]
             right_type = self.v.visit(right_node)
-            right_place = self.getPlace(right_node) or right_node.getText()
+            # right_place = self.getPlace(right_node) or right_node.getText()
+            right_place = self.getPlace(right_node) or self.deepPlace(right_node)[0] or right_node.getText()
 
             res = resultRelational(last_type, right_type)
             if isinstance(res, ErrorType):
@@ -335,7 +341,8 @@ class ExpressionsAnalyzer:
 
         left_node = children[0]
         left_type = self.v.visit(left_node)
-        left_place = self.getPlace(left_node) or left_node.getText()
+        # left_place = self.getPlace(left_node) or left_node.getText()
+        left_place  = self.getPlace(left_node)  or self.deepPlace(left_node)[0]  or left_node.getText()
 
         i = 1
         last_type = left_type
@@ -348,7 +355,8 @@ class ExpressionsAnalyzer:
             op_txt = children[i].getText()
             right_node = children[i + 1]
             right_type = self.v.visit(right_node)
-            right_place = self.getPlace(right_node) or right_node.getText()
+            # right_place = self.getPlace(right_node) or right_node.getText()
+            right_place = self.getPlace(right_node) or self.deepPlace(right_node)[0] or right_node.getText()
 
             res = resultEquality(last_type, right_type)
             if isinstance(res, ErrorType):
@@ -379,7 +387,8 @@ class ExpressionsAnalyzer:
 
         left_node = children[0]
         left_type = self.v.visit(left_node)
-        left_place = self.getPlace(left_node) or left_node.getText()
+        # left_place = self.getPlace(left_node) or left_node.getText()
+        left_place  = self.getPlace(left_node)  or self.deepPlace(left_node)[0]  or left_node.getText()
 
         i = 1
         current_type = left_type
@@ -389,7 +398,8 @@ class ExpressionsAnalyzer:
         while i < len(children):
             right_node = children[i + 1]
             right_type = self.v.visit(right_node)
-            right_place = self.getPlace(right_node) or right_node.getText()
+            # right_place = self.getPlace(right_node) or right_node.getText()
+            right_place = self.getPlace(right_node) or self.deepPlace(right_node)[0] or right_node.getText()
 
             res = resultLogical(current_type, right_type)
             if isinstance(res, ErrorType):
@@ -417,7 +427,8 @@ class ExpressionsAnalyzer:
 
         left_node = children[0]
         left_type = self.v.visit(left_node)
-        left_place = self.getPlace(left_node) or left_node.getText()
+        # left_place = self.getPlace(left_node) or left_node.getText()
+        left_place  = self.getPlace(left_node)  or self.deepPlace(left_node)[0]  or left_node.getText()
 
         i = 1
         current_type = left_type
@@ -427,7 +438,8 @@ class ExpressionsAnalyzer:
         while i < len(children):
             right_node = children[i + 1]
             right_type = self.v.visit(right_node)
-            right_place = self.getPlace(right_node) or right_node.getText()
+            # right_place = self.getPlace(right_node) or right_node.getText()
+            right_place = self.getPlace(right_node) or self.deepPlace(right_node)[0] or right_node.getText()
 
             res = resultLogical(current_type, right_type)
             if isinstance(res, ErrorType):
@@ -453,7 +465,9 @@ class ExpressionsAnalyzer:
             op_txt = ctx.getChild(0).getText()
             inner_node = ctx.unaryExpr()
             inner_type = self.v.visit(inner_node)
-            inner_place = self.getPlace(inner_node) or inner_node.getText()
+            # inner_place = self.getPlace(inner_node) or inner_node.getText()
+            inner_place = self.getPlace(inner_node) or self.deepPlace(inner_node)[0] or inner_node.getText()
+
 
             if op_txt == '-':
                 res = resultUnaryMinus(inner_type)
