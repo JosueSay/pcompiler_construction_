@@ -100,9 +100,18 @@ class VisitorCPS(CompiscriptVisitor):
                 + (f", init_note={sym.init_note}" if sym.init_note else "")
             )
             storage_info = f", storage={sym.storage}, is_ref={sym.is_ref}"
+            extra_ir = ""
+            try:
+                if getattr(sym, "label", None):
+                    extra_ir += f", label={sym.label}"
+                if getattr(sym, "local_frame_size", None) is not None:
+                    extra_ir += f", local_frame_size={sym.local_frame_size}"
+            except Exception:
+                pass
+
             log_semantic(
                 f" - {sym.name}: {sym.type} ({sym.category}), "
-                f"tamaño={sym.width}, offset={sym.offset}{storage_info}{init_info}"
+                f"tamaño={sym.width}, offset={sym.offset}{storage_info}{init_info}{extra_ir}"
             )
         return None
 

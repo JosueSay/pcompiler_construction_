@@ -314,11 +314,14 @@ class ControlFlowAnalyzer:
         if else_stmt is not None:
             self.v.emitter.emitGoto(lend)
             self.v.emitter.emitLabel(lelse)
+            self.v.emitter.clearFlowTermination()
             else_result = self.v.visit(else_stmt) or {"terminated": False, "reason": None}
+
         else:
             else_result = {"terminated": False, "reason": None}
 
         self.v.emitter.emitLabel(lend)
+        self.v.emitter.clearFlowTermination() 
 
         # Terminación si ambas ramas terminan
         both_terminate = bool(then_result.get("terminated") and else_result.get("terminated"))
@@ -359,8 +362,10 @@ class ControlFlowAnalyzer:
         self.v.emitter.emitGoto(lstart)
 
         self.v.emitter.emitLabel(lend)
+        self.v.emitter.clearFlowTermination()
         self.loop_ctx_stack.pop()
         self.v.loop_depth -= 1
+
         return {"terminated": False, "reason": None}
 
     # ---------- DO-WHILE ----------
@@ -385,8 +390,10 @@ class ControlFlowAnalyzer:
         self.visitCond(cond, lbody, lend)
 
         self.v.emitter.emitLabel(lend)
+        self.v.emitter.clearFlowTermination()
         self.loop_ctx_stack.pop()
         self.v.loop_depth -= 1
+
         return {"terminated": False, "reason": None}
 
     # ---------- FOR ----------
@@ -533,8 +540,10 @@ class ControlFlowAnalyzer:
 
             self.v.emitter.emitGoto(lstart)
             self.v.emitter.emitLabel(lend)
+            self.v.emitter.clearFlowTermination()   # 🔸 habilitar emisión tras el bucle
             self.loop_ctx_stack.pop()
             self.v.loop_depth -= 1
+
             return {"terminated": False, "reason": None}
 
         except Exception as ex:
@@ -617,8 +626,10 @@ class ControlFlowAnalyzer:
                 self.v.visit(st)
 
         self.v.emitter.emitLabel(lend)
+        self.v.emitter.clearFlowTermination()
         self.switch_ctx_stack.pop()
         return {"terminated": False, "reason": None}
+
 
     # ---------- break / continue ----------
     def visitBreakStatement(self, ctx: CompiscriptParser.BreakStatementContext):
