@@ -4,7 +4,6 @@ from semantic.symbol_kinds import SymbolCategory
 from semantic.registry.type_resolver import resolve_typectx, validate_known_types
 from logs.logger_semantic import log_semantic
 from semantic.errors import SemanticError
-from semantic.custom_types import FunctionType, VoidType as _VoidType
 
 class ClassesAnalyzer:
     def __init__(self, v):
@@ -127,6 +126,9 @@ class ClassesAnalyzer:
             )
             fsym.param_types = param_types
             fsym.return_type = rtype
+
+            # Etiqueta TAC para llamadas a método (f_<Class>_<method>)
+            fsym.label = f"f_{current_class}_{method_name}"
 
             # Registrar para resolución de métodos/constructor.
             self.v.method_registry.register(qname, param_types, rtype)
