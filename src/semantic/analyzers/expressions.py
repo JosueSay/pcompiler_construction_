@@ -551,11 +551,9 @@ class ExpressionsAnalyzer:
                 line=ctx.start.line, column=ctx.start.column))
             return ErrorType()
 
-        # Recolectar tipos de argumentos
-        arg_types = []
-        if ctx.arguments():
-            for e in ctx.arguments().expression():
-                arg_types.append(self.v.visit(e))
+        # Recolectar nodos + tipos de argumentos (izq→der)
+        args_nodes = list(ctx.arguments().expression()) if ctx.arguments() else []
+        arg_types = [self.v.visit(e) for e in args_nodes]
 
         # Buscar firma de constructor en la jerarquía
         found_sig = None
@@ -570,6 +568,7 @@ class ExpressionsAnalyzer:
             base = self.v.class_handler._classes.get(curr).base if hasattr(self.v.class_handler, "_classes") else None
             curr = base
 
+        # Validaciones de aridad/tipos (sin abortar la emisión)
         if found_sig is None:
             if len(arg_types) != 0:
                 self.v.appendErr(SemanticError(
@@ -591,9 +590,42 @@ class ExpressionsAnalyzer:
                             f"no se puede asignar {at} a {pt}.",
                             line=ctx.start.line, column=ctx.start.column))
 
-        # Emisión real de new/ctor llegará en la etapa de RA; aquí solo tipo/place
-        self.setPlace(ctx, f"new {class_name}()", False)
+        # === Emisión TAC real ===
+        # 1) Reserva del objeto: t_obj = newobj C, size(C)
+        obj_size = 0
+        try:
+            obj_size = int(self.v.class_handler.get_object_size(class_name))
+        except Exception:
+            obj_size = 0  # fallback defensivo
+
+        t_obj = self.v.emitter.temp_pool.newTemp("ref")
+        self.v.emitter.emit(Op.NEWOBJ, arg1=class_name, arg2=str(obj_size), res=t_obj)
+
+        # 2) Si hay constructor, emite: param this; param a1..an; call f_C_constructor, n+1
+        if found_sig is not None:
+            ctor_owner, (_param_types, _rtype) = found_sig
+
+            # param this
+            self.v.emitter.emit(Op.PARAM, arg1=t_obj)
+            n_params = 1
+
+            # params de usuario (izq→der)
+            for e in args_nodes:
+                p, is_tmp = self.deepPlace(e)
+                aplace = p or e.getText()
+                self.v.emitter.emit(Op.PARAM, arg1=aplace)
+                if is_tmp:
+                    self.v.emitter.temp_pool.free(aplace, "*")
+                n_params += 1
+
+            # label del ctor (coherente con cómo registraste métodos: f_<Class>_<method>)
+            f_label = f"f_{ctor_owner}_constructor"
+            self.v.emitter.emit(Op.CALL, arg1=f_label, arg2=str(n_params))
+
+        # El valor de 'new' es el objeto materializado
+        self.setPlace(ctx, t_obj, True)
         return ClassType(class_name)
+
 
     def visitPropertyAccessExpr(self, ctx):
         """
@@ -620,7 +652,7 @@ class ExpressionsAnalyzer:
 
         # 2) Método en esta clase o en bases (method_registry y, como respaldo, symbol table)
         #    Construimos FunctionType quitando 'this' del inicio si existe.
-        def _lookup_method_in_hierarchy(cls: str, mname: str):
+        def lookupMethodInHierarchy(cls: str, mname: str):
             # registry directo
             sig = self.v.method_registry.lookup(f"{cls}.{mname}")
             if sig is not None:
@@ -649,7 +681,7 @@ class ExpressionsAnalyzer:
                 return cls, (sym.param_types, ret_t)
             return None, None
 
-        owner, sig = _lookup_method_in_hierarchy(class_name, prop_name)
+        owner, sig = lookupMethodInHierarchy(class_name, prop_name)
         if sig is not None:
             param_types, ret_t = sig
             ret_t = ret_t if ret_t is not None else VoidType()

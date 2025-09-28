@@ -126,20 +126,53 @@ class StatementsAnalyzer:
         else:
             # Con inicializador
             rhs_type = self.v.visit(init.expression())
+            if isinstance(rhs_type, ErrorType):
+                if self.v.class_stack:
+                    current_class = self.v.class_stack[-1]
+                    log_semantic(f"[class.attr] {current_class}.{name}: {declared_type}")
+                    try:
+                        self.v.scopeManager.addSymbol(
+                            name, declared_type, category=SymbolCategory.VARIABLE,
+                            initialized=False, init_value_type=None, init_note="init-error"
+                        )
+                    except Exception:
+                        pass
+                    self.v.class_handler.add_attribute(current_class, name, declared_type)
+                else:
+                    try:
+                        self.v.scopeManager.addSymbol(
+                            name, declared_type, category=SymbolCategory.VARIABLE,
+                            initialized=False, init_value_type=None, init_note="init-error"
+                        )
+                    except Exception:
+                        pass
+                self.v.emitter.temp_pool.resetPerStatement()
+                return
+
+            
             if rhs_type is None:
                 self.v.emitter.temp_pool.resetPerStatement()
                 return
+           
             if not isAssignable(declared_type, rhs_type):
                 self.v.appendErr(SemanticError(
                     f"Asignación incompatible: no se puede asignar {rhs_type} a {declared_type} en '{name}'.",
                     line=ctx.start.line, column=ctx.start.column))
-                # En contexto de clase, aún registramos el atributo con el tipo declarado
                 if self.v.class_stack:
                     current_class = self.v.class_stack[-1]
+                    # 1) registrar el símbolo (no inicializado) en el scope de la clase
+                    try:
+                        self.v.scopeManager.addSymbol(
+                            name, declared_type, category=SymbolCategory.VARIABLE,
+                            initialized=False, init_value_type=None, init_note="init-error"
+                        )
+                    except Exception:
+                        pass
+                    # 2) registrar el atributo en class_handler para offsets
                     self.v.class_handler.add_attribute(current_class, name, declared_type)
-                    log_semantic(f"[class.attr] {current_class}.{name}: {declared_type} (registrado pese a asignación incompatible)")
                 self.v.emitter.temp_pool.resetPerStatement()
                 return
+
             initialized = True
             init_value_type = rhs_type
             init_note = "explicit"
@@ -213,6 +246,18 @@ class StatementsAnalyzer:
             return
 
         rhs_type = self.v.visit(expr_ctx)
+        if isinstance(rhs_type, ErrorType):
+            try:
+                self.v.scopeManager.addSymbol(name, declared_type, category=SymbolCategory.CONSTANT)
+            except Exception:
+                pass
+            if self.v.class_stack:
+                current_class = self.v.class_stack[-1]
+                self.v.class_handler.add_attribute(current_class, name, declared_type)
+            self.v.emitter.temp_pool.resetPerStatement()
+            return
+
+
         if rhs_type is None:
             self.v.emitter.temp_pool.resetPerStatement()
             return
@@ -231,6 +276,11 @@ class StatementsAnalyzer:
             self.v.appendErr(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
             self.v.emitter.temp_pool.resetPerStatement()
             return
+        
+        if self.v.class_stack:
+            current_class = self.v.class_stack[-1]
+            self.v.class_handler.add_attribute(current_class, name, declared_type)
+            log_semantic(f"[class.attr] {current_class}.{name}: {declared_type}")
 
         # TAC
         p, _ = self.v.exprs.deepPlace(expr_ctx)
@@ -269,6 +319,10 @@ class StatementsAnalyzer:
                 return
 
             rhs_type = self.v.visit(exprs[0])
+            if isinstance(rhs_type, ErrorType):
+                self.v.emitter.temp_pool.resetPerStatement()
+                return
+
             if rhs_type is None:
                 self.v.emitter.temp_pool.resetPerStatement()
                 return
@@ -315,6 +369,10 @@ class StatementsAnalyzer:
                 return
 
             rhs_t = self.v.visit(rhs_exp)
+            if isinstance(rhs_t, ErrorType) or rhs_t is None:
+                self.v.emitter.temp_pool.resetPerStatement()
+                return
+
             if not isAssignable(prop_t, rhs_t):
                 self.v.appendErr(SemanticError(
                     f"Asignación incompatible: no se puede asignar {rhs_t} a {prop_t} en '{class_name}.{prop_name}'.",
@@ -327,9 +385,19 @@ class StatementsAnalyzer:
             obj_place = p_obj or lhs_obj.getText()
             p_rhs, _ = self.v.exprs.deepPlace(rhs_exp)
             rhs_place = p_rhs or rhs_exp.getText()
-            self.v.emitter.emit(Op.FIELD_STORE, arg1=obj_place, res=rhs_place, label=prop_name)
+            q = self.v.emitter.emit(Op.FIELD_STORE, arg1=obj_place, res=rhs_place, label=prop_name)
+            # hook opcional de offset (no afecta al TAC textual)
+            try:
+                off = self.v.class_handler.get_field_offset(class_name, prop_name)
+                if q is not None and off is not None:
+                    setattr(q, "_field_offset", off)       # metadata para CG
+                    setattr(q, "_field_owner", class_name) # opcional
+            except Exception:
+                pass
+
             self.v.emitter.temp_pool.resetPerStatement()
             return
+
 
         # Fallback
         self.v.appendErr(SemanticError(

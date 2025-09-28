@@ -164,7 +164,7 @@ class LValuesAnalyzer:
                     self.v.emitter.emit(Op.PARAM, arg1=recv_place)
                     n_params += 1
                     if f_label is None:
-                        owner = getattr(base_type, "_bound_receiver", None)
+                        owner = getattr(base_type, "_decl_owner", None) or getattr(base_type, "_bound_receiver", None)
                         mname = getattr(base_type, "_method_name", None)
                         f_label = f"f_{owner}_{mname}"
 
@@ -250,12 +250,22 @@ class LValuesAnalyzer:
                 if attr_t is not None:
                     # t = base.f   (lectura de atributo)
                     t = self.v.emitter.temp_pool.newTemp(self.v.exprs.typeToTempKind(attr_t))
-                    self.v.emitter.emit(Op.FIELD_LOAD, arg1=base_place, res=t, label=prop_name)
+                    q = self.v.emitter.emit(Op.FIELD_LOAD, arg1=base_place, res=t, label=prop_name)
+                    # hook opcional de offset (no afecta al TAC textual)
+                    try:
+                        off = self.v.class_handler.get_field_offset(class_name, prop_name)
+                        if q is not None and off is not None:
+                            setattr(q, "_field_offset", off)      # metadata para CG
+                            setattr(q, "_field_owner", class_name) # opcional, por si ayuda
+                    except Exception:
+                        pass
+
                     base_place = t
                     base_type  = attr_t
                     self.setPlace(suf, base_place, True)
                     lit_t = None
                     continue
+
                 # 2) ¿Método? (resuelve a FunctionType; NO emite TAC aquí)
                 #    Intentamos: method_registry qname en esta clase o en la jerarquía,
                 #    o un símbolo con nombre calificado "<cls>.<m>".
@@ -283,6 +293,7 @@ class LValuesAnalyzer:
                         setattr(ftype, "_bound_receiver", class_name)
                         setattr(ftype, "_method_name", prop_name)
                         setattr(ftype, "_recv_place", base_place)
+                        setattr(ftype, "_decl_owner", owner or class_name)
                         # intenta tomar label desde la tabla, si existe:
                         qname = f"{owner}.{prop_name}" if owner else f"{class_name}.{prop_name}"
                         fsym = self.v.scopeManager.lookup(qname)

@@ -11,7 +11,7 @@ class FunctionsAnalyzer:
     def __init__(self, v):
         self.v = v
 
-    def _make_func_label(self, name: str) -> str:
+    def makeFuncLabel(self, name: str) -> str:
         """
         Convención de etiquetas:
           - Función libre: f_<name>
@@ -74,7 +74,7 @@ class FunctionsAnalyzer:
             fsym.captures = CaptureInfo(captured=[])
 
             # etiqueta para llamadas (TAC)
-            fsym.label = self._make_func_label(name)
+            fsym.label = self.makeFuncLabel(name)
 
             log_semantic(f"[function] declarada: {name}({', '.join(param_names)}) -> {rtype if rtype else 'void?'} ; label={fsym.label}")
         except Exception as e:
