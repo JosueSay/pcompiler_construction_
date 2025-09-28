@@ -107,7 +107,7 @@ class LValuesAnalyzer:
 
                 # TAC: t = base[index]
                 idx_place = getattr(suf.expression(), "_place", suf.expression().getText())
-                t = self.v.emitter.temp_pool.newTemp("ref")  # valor podría ser primitivo o ref → usamos 'ref' genérico
+                t = self.v.emitter.temp_pool.newTemp(self.v.exprs.typeToTempKind(base_type.elem_type))
                 self.v.emitter.emit(Op.INDEX_LOAD, arg1=base_place, arg2=idx_place, res=t)
                 # liberar temporal del índice si aplica
                 if getattr(suf.expression(), "_is_temp", False):
@@ -120,7 +120,7 @@ class LValuesAnalyzer:
                 self.setPlace(suf, base_place, True)
                 continue
 
-            # --- llamada: ( ... )(args) ---
+            # --- CallExpr: emitir TAC de llamada ---
             if isinstance(suf, CompiscriptParser.CallExprContext):
                 if not isinstance(base_type, FunctionType):
                     self.v.appendErr(SemanticError(
@@ -128,11 +128,10 @@ class LValuesAnalyzer:
                         line=ctx.start.line, column=ctx.start.column))
                     base_type = ErrorType()
                     continue
-
-                arg_types = []
-                if suf.arguments():
-                    for e in suf.arguments().expression():
-                        arg_types.append(self.v.visit(e))
+                
+                # --- VALIDACIÓN semántica (conteo y tipos) ---
+                args_nodes = list(suf.arguments().expression()) if suf.arguments() else []
+                arg_types = [self.v.visit(e) for e in args_nodes]
 
                 expected = len(base_type.param_types)
                 got = len(arg_types)
@@ -150,10 +149,59 @@ class LValuesAnalyzer:
                             f"Argumento #{i} incompatible: no se puede asignar {at} a {pt}.",
                             line=ctx.start.line, column=ctx.start.column))
                         ok = False
+                if not ok:
+                    base_type = ErrorType()
+                    continue
+                
+                recv_place = None
 
-                base_type = base_type.return_type if ok else ErrorType()
-                # NOTA: aún no emitimos TAC de call (eso entra en la fase de funciones/RA)
-                lit_t = None
+
+                # 1) param implícito 'this' si es método
+                n_params = 0
+                f_label  = getattr(base_type, "_label", None)
+                if hasattr(base_type, "_recv_place"):
+                    recv_place = getattr(base_type, "_recv_place")
+                    self.v.emitter.emit(Op.PARAM, arg1=recv_place)
+                    n_params += 1
+                    if f_label is None:
+                        owner = getattr(base_type, "_bound_receiver", None)
+                        mname = getattr(base_type, "_method_name", None)
+                        f_label = f"f_{owner}_{mname}"
+
+                # 2) params de usuario (izq→der)
+                args = args_nodes     # <- usa los mismos
+                for e in args:
+                    p, is_tmp = self.v.exprs.deepPlace(e)
+                    aplace = p or e.getText()
+                    self.v.emitter.emit(Op.PARAM, arg1=aplace)
+                    if is_tmp:
+                        self.v.emitter.temp_pool.free(aplace, "*")
+                    n_params += 1
+
+
+                # 3) label de funciones libres si no lo tenemos
+                if f_label is None:
+                    # base de llamada es un identificador de función (place textual del primario)
+                    base_name = getattr(ctx.primaryAtom(), "_place", None) or ctx.primaryAtom().getText()
+                    fsym = self.v.scopeManager.lookup(base_name)
+                    f_label = getattr(fsym, "label", None) or f"f_{base_name}"
+
+                # 4) emitir call y propagar place
+                ret_t = base_type.return_type
+                if isinstance(ret_t, VoidType):
+                    self.v.emitter.emit(Op.CALL, arg1=f_label, arg2=str(n_params))
+                    # una llamada void no produce valor utilizable para encadenar
+                    base_place = ""   # no se usa
+                    self.setPlace(suf, "", False)
+                    base_type = ret_t
+                else:
+                    t = self.v.emitter.temp_pool.newTemp(self.v.exprs.typeToTempKind(ret_t))
+                    self.v.emitter.emit(Op.CALL, arg1=f_label, arg2=str(n_params), res=t)
+                    base_place = t
+                    base_type  = ret_t
+                    self.setPlace(suf, t, True)
+                if recv_place and isinstance(recv_place, str) and recv_place.startswith("t"):
+                    self.v.emitter.temp_pool.free(recv_place, "*")
                 continue
 
             # --- acceso a propiedad/método: expr.Identifier ---
@@ -172,53 +220,54 @@ class LValuesAnalyzer:
                 # 1) ¿Atributo? (con lookup por herencia)
                 attr_t = self.v.class_handler.get_attribute_type(class_name, prop_name)
                 if attr_t is not None:
-                    # TAC: t = base.prop   (lectura rvalue)
-                    t = self.v.emitter.temp_pool.newTemp("ref")
+                    # t = base.f   (lectura de atributo)
+                    t = self.v.emitter.temp_pool.newTemp(self.v.exprs.typeToTempKind(attr_t))
                     self.v.emitter.emit(Op.FIELD_LOAD, arg1=base_place, res=t, label=prop_name)
                     base_place = t
-                    base_type = attr_t
+                    base_type  = attr_t
                     self.setPlace(suf, base_place, True)
                     lit_t = None
                     continue
-
                 # 2) ¿Método? (resuelve a FunctionType; NO emite TAC aquí)
                 #    Intentamos: method_registry qname en esta clase o en la jerarquía,
                 #    o un símbolo con nombre calificado "<cls>.<m>".
-                def lookup_method_in_hierarchy(cls: str, mname: str):
-                    q = f"{cls}.{mname}"
-                    mt = self.v.method_registry.lookup(q)
-                    if mt is not None:
-                        return cls, mt
-                    if hasattr(self.v.class_handler, "iter_bases"):
-                        for base in self.v.class_handler.iter_bases(cls):
-                            q = f"{base}.{mname}"
-                            mt = self.v.method_registry.lookup(q)
-                            if mt is not None:
-                                return base, mt
-                    # último intento: símbolo calificado
-                    sym = self.v.scopeManager.lookup(f"{cls}.{mname}")
-                    if sym is not None and sym.category == SymbolCategory.FUNCTION:
-                        # param_types incluye 'this' como primero en símbolos de métodos
-                        ret_t = sym.return_type if sym.return_type is not None else VoidType()
-                        return cls, (sym.param_types, ret_t)
-                    return None, None
+                sig = self.v.method_registry.lookup(f"{class_name}.{prop_name}")
+                owner = class_name if sig is not None else None
+                if sig is None:
+                    # subir por bases
+                    curr, seen = class_name, set()
+                    while curr and curr not in seen and sig is None:
+                        seen.add(curr)
+                        sig = self.v.method_registry.lookup(f"{curr}.{prop_name}")
+                        if sig:
+                            owner = curr
+                            break
+                        curr = getattr(self.v.class_handler._classes.get(curr), "base", None)
 
-                owner, mt = lookup_method_in_hierarchy(class_name, prop_name)
-                if mt is not None:
-                    param_types, rtype = mt
-                    ret_t = rtype if rtype is not None else VoidType()
-                    # quitamos el 'this' implícito para el tipo de llamada que sigue
+                if sig:
+                    param_types, ret_t = sig
+                    ret_t = ret_t or VoidType()
                     params_wo_this = param_types[1:] if len(param_types) > 0 else []
                     ftype = FunctionType(params_wo_this, ret_t)
+
+                    # anotar receptor y label para la llamada
                     try:
-                        setattr(ftype, "_bound_receiver", class_name)  # pista útil para la fase de llamadas
-                        setattr(ftype, "_decl_owner", owner or class_name)
+                        setattr(ftype, "_bound_receiver", class_name)
+                        setattr(ftype, "_method_name", prop_name)
+                        setattr(ftype, "_recv_place", base_place)
+                        # intenta tomar label desde la tabla, si existe:
+                        qname = f"{owner}.{prop_name}" if owner else f"{class_name}.{prop_name}"
+                        fsym = self.v.scopeManager.lookup(qname)
+                        if fsym is not None and getattr(fsym, "label", None):
+                            setattr(ftype, "_label", fsym.label)
+                        else:
+                            setattr(ftype, "_label", f"f_{owner or class_name}_{prop_name}")
                     except Exception:
                         pass
+
                     base_type = ftype
-                    # No cambiamos base_place (no hay lectura de memoria aún)
-                    self.setPlace(suf, f"{class_name}.{prop_name}", False)
-                    lit_t = None
+                    # no cambiamos base_place (no hay FIELD_LOAD de métodos)
+                    self.setPlace(suf, base_place, base_place.startswith("t"))
                     continue
 
                 # 3) Nada encontrado: error
@@ -226,7 +275,6 @@ class LValuesAnalyzer:
                     f"Miembro '{prop_name}' no declarado en clase '{class_name}'.",
                     line=ctx.start.line, column=ctx.start.column))
                 base_type = ErrorType()
-                lit_t = None
                 continue
 
         # Al terminar el encadenamiento, fija el place del LHS completo
