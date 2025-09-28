@@ -127,7 +127,7 @@ tr:nth-child(even){{background:#fafafa}}
 code{{font-family:ui-monospace,monospace}}
 </style>
 </head><body>
-<h1>Tabla de símbolos (con metadatos TAC)</h1>
+<h1>Tabla de símbolos</h1>
 <table>
 <thead><tr>
 <th>name</th>

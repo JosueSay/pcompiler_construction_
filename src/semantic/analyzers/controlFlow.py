@@ -540,7 +540,7 @@ class ControlFlowAnalyzer:
 
             self.v.emitter.emitGoto(lstart)
             self.v.emitter.emitLabel(lend)
-            self.v.emitter.clearFlowTermination()   # 🔸 habilitar emisión tras el bucle
+            self.v.emitter.clearFlowTermination()
             self.loop_ctx_stack.pop()
             self.v.loop_depth -= 1
 
