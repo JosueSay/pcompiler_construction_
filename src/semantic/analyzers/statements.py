@@ -130,6 +130,41 @@ class StatementsAnalyzer:
     @log_function
     def rhsOfAssignExpr(self, expr_ctx):
         log_semantic(f"rhsOfAssignExpr -> expr_ctx={expr_ctx}")
+
+        # 0) Si hay un AssignExpr debajo, su RHS es exprNoAssign()
+        try:
+            assign = self.findDesc(expr_ctx, CompiscriptParser.AssignExprContext)
+            if assign is not None:
+                # camino feliz: método del parser
+                try:
+                    rhs = assign.exprNoAssign()
+                    if isinstance(rhs, (list, tuple)):
+                        rhs = rhs[-1]
+                    if rhs is not None:
+                        log_semantic(f"rhsOfAssignExpr -> RHS por AssignExpr.exprNoAssign() {rhs}")
+                        return rhs
+                except Exception:
+                    pass
+
+                # fallback: tomar el primer hijo después de '=' que sea ExprNoAssign / Expression
+                try:
+                    n = assign.getChildCount()
+                    saw_eq = False
+                    for i in range(n):
+                        ch = assign.getChild(i)
+                        if isinstance(ch, TerminalNode) and ch.getText() == '=':
+                            saw_eq = True
+                            continue
+                        if saw_eq and (isinstance(ch, CompiscriptParser.ExprNoAssignContext) or
+                                    isinstance(ch, CompiscriptParser.ExpressionContext)):
+                            log_semantic(f"rhsOfAssignExpr -> RHS por hijos AssignExpr {ch}")
+                            return ch
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # a) hijos toplevel (aceptando ExprNoAssign además de Expression)
         try:
             n = expr_ctx.getChildCount()
             kids = [expr_ctx.getChild(i) for i in range(n)]
@@ -138,19 +173,66 @@ class StatementsAnalyzer:
                 if isinstance(ch, TerminalNode) and ch.getText() == '=':
                     saw_eq = True
                     continue
-                if saw_eq and isinstance(ch, CompiscriptParser.ExpressionContext):
-                    log_semantic(f"rhsOfAssignExpr -> RHS encontrado {ch}")
+                if saw_eq and (isinstance(ch, CompiscriptParser.ExprNoAssignContext) or
+                            isinstance(ch, CompiscriptParser.ExpressionContext)):
+                    log_semantic(f"rhsOfAssignExpr -> RHS encontrado (toplevel) {ch}")
                     return ch
         except Exception:
             pass
 
+        # b) última subexpresión (si aplica)
         try:
-            for ch in reversed(list(expr_ctx.getChildren())):
-                if isinstance(ch, CompiscriptParser.ExpressionContext):
-                    return ch
+            raw = expr_ctx.expression()
+            exprs = list(raw) if isinstance(raw, (list, tuple)) else ([raw] if raw is not None else [])
+            if len(exprs) >= 1:
+                log_semantic(f"rhsOfAssignExpr -> fallback por lista/último: len={len(exprs)}")
+                return exprs[-1]
         except Exception:
             pass
 
+        # c) último descendiente que sea ExprNoAssign / Expression
+        try:
+            last = None
+            for ch in expr_ctx.getChildren():
+                if isinstance(ch, CompiscriptParser.ExprNoAssignContext) or isinstance(ch, CompiscriptParser.ExpressionContext):
+                    last = ch
+            if last is not None:
+                log_semantic(f"rhsOfAssignExpr -> RHS por descendiente final {last}")
+                return last
+        except Exception:
+            pass
+
+        # d) fallback textual: emparejar por texto pero buscando también ExprNoAssign
+        try:
+            s = expr_ctx.getText() or ""
+            if s:
+                # localizar '=' de nivel superior
+                eq_pos = None
+                for i, ch in enumerate(s):
+                    if ch != '=':
+                        continue
+                    prev = s[i-1] if i > 0 else ''
+                    nxt  = s[i+1] if i+1 < len(s) else ''
+                    if prev not in ('=', '!', '<', '>') and nxt != '=':
+                        eq_pos = i
+                        break
+                if eq_pos is not None and eq_pos+1 < len(s):
+                    rhs_txt = s[eq_pos+1:]
+                    cands  = self.findAllDesc(expr_ctx, CompiscriptParser.ExpressionContext)
+                    cands += self.findAllDesc(expr_ctx, CompiscriptParser.ExprNoAssignContext)
+                    exact = [c for c in cands if getattr(c, "getText", lambda: "")() == rhs_txt]
+                    if exact:
+                        log_semantic(f"rhsOfAssignExpr -> RHS por texto (exact) {exact[-1]}")
+                        return exact[-1]
+                    suffix = [c for c in cands if getattr(c, "getText", lambda: "")().endswith(rhs_txt)]
+                    if suffix:
+                        suffix.sort(key=lambda c: len(getattr(c, "getText", lambda: "")()))
+                        log_semantic(f"rhsOfAssignExpr -> RHS por texto (suffix) {suffix[0]}")
+                        return suffix[0]
+        except Exception:
+            pass
+
+        log_semantic("rhsOfAssignExpr -> RHS NO encontrado")
         return None
 
     @log_function
@@ -168,18 +250,27 @@ class StatementsAnalyzer:
     @log_function
     def handleSimpleIndexStore(self, base_name, idx_node, rhs_node, ctx_stmt):
         log_semantic(f"handleSimpleIndexStore -> inicio: {base_name}[{idx_node.getText()}] = {rhs_node.getText()}")
+
+        # usar la expresión interna del índice si existe
+        try:
+            idx_expr = idx_node.expression()
+        except Exception:
+            idx_expr = None
+        if idx_expr is None:
+            idx_expr = idx_node
+
         sym = self.v.scopeManager.lookup(base_name)
         if sym is None:
             log_semantic(f"handleSimpleIndexStore -> ERROR variable no declarada: {base_name}")
             return
 
         arr_t = sym.type
-        idx_t = self.v.visit(idx_node)
+        idx_t = self.v.visit(idx_expr)
         rhs_t = self.v.visit(rhs_node)
         log_semantic(f"handleSimpleIndexStore -> tipos -> arr:{arr_t}, idx:{idx_t}, rhs:{rhs_t}")
 
-        p_idx, it_idx = self.v.exprs.deepPlace(idx_node)
-        idx_place = p_idx or idx_node.getText()
+        p_idx, it_idx = self.v.exprs.deepPlace(idx_expr)
+        idx_place = p_idx or idx_expr.getText()
         p_rhs, it_rhs = self.v.exprs.deepPlace(rhs_node)
         rhs_place = p_rhs or rhs_node.getText()
         log_semantic(f"handleSimpleIndexStore -> deepPlace -> idx='{idx_place}', rhs='{rhs_place}'")
@@ -217,11 +308,8 @@ class StatementsAnalyzer:
                     return None
 
             # Fallback
-            assign_ctx = self.findDesc(ctx, CompiscriptParser.AssignmentContext)
-            if assign_ctx is not None:
-                log_semantic("[stmt] fallback visitAssignment")
-                self.visitAssignment(assign_ctx)
-
+            log_semantic("[stmt] fallback visitAssignment(expr)")
+            self.visitAssignment(expr)
             self.v.emitter.temp_pool.resetPerStatement()
             return None
 
@@ -509,11 +597,88 @@ class StatementsAnalyzer:
         2) expression '.' Identifier '=' expression ';'   (asignación a propiedad)
         3) Indexación: arr[i] = expr
         """
+        # Detectar tipo de ctx: puede venir de fallback con ExpressionContext
+        is_expr_ctx = isinstance(ctx, CompiscriptParser.ExpressionContext)
         exprs = self.expressionsFromCTX(ctx)
-        log_semantic(f"[assign] visitAssignment: n_exprs={len(exprs)}, texto='{ctx.getText()}'")
+        log_semantic(f"[assign] visitAssignment: ctx_type={type(ctx).__name__}, n_exprs={len(exprs)}, texto='{ctx.getText()}'")
         n = len(exprs)
 
-        # --- 1) Variable simple ---
+        # --- Caso especial cuando el fallback nos pasa ExpressionContext ---
+        if is_expr_ctx:
+            # Prioridad 1: indexación simple  v[i] = expr
+            if n == 2:
+                m = self.matchSimpleIndexAssign(exprs[0])
+                if m is not None:
+                    base_name, idx_node = m
+                    rhs_node = exprs[1]
+                    # Validaciones y emisión (reusa la lógica de store simple)
+                    self.handleSimpleIndexStore(base_name, idx_node, rhs_node, ctx)
+                    self.v.emitter.temp_pool.resetPerStatement()
+                    return
+
+                # Prioridad 2: identificador simple  id = expr
+                name = None
+                lhs_ctx = self.findDesc(exprs[0], CompiscriptParser.LeftHandSideContext)
+                if lhs_ctx is not None:
+                    # sin sufijos -> identificador pelado
+                    has_suffix = False
+                    try:
+                        sufs = lhs_ctx.suffixOp()
+                        has_suffix = (sufs is not None) and (len(sufs) > 0)
+                    except Exception:
+                        pass
+                    if not has_suffix:
+                        try:
+                            name = lhs_ctx.primaryAtom().getText()
+                        except Exception:
+                            name = None
+
+                if name:
+                    sym = self.v.scopeManager.lookup(name)
+                    if sym is None:
+                        self.v.appendErr(SemanticError(
+                            f"Uso de variable no declarada: '{name}'",
+                            line=ctx.start.line, column=ctx.start.column))
+                        log_semantic(f"[assign] ERROR: variable no declarada '{name}'")
+                        self.v.emitter.temp_pool.resetPerStatement()
+                        return
+                    if sym.category == SymbolCategory.CONSTANT:
+                        self.v.appendErr(SemanticError(
+                            f"No se puede modificar la constante '{name}'.",
+                            line=ctx.start.line, column=ctx.start.column))
+                        log_semantic(f"[assign] ERROR: intento de modificar constante '{name}'")
+                        self.v.emitter.temp_pool.resetPerStatement()
+                        return
+
+                    rhs_type = self.v.visit(exprs[1])
+                    log_semantic(f"[assign] RHS type -> {rhs_type}")
+
+                    if rhs_type is None or isinstance(rhs_type, ErrorType):
+                        self.v.emitter.temp_pool.resetPerStatement()
+                        return
+                    if not isAssignable(sym.type, rhs_type):
+                        self.v.appendErr(SemanticError(
+                            f"Asignación incompatible: no se puede asignar {rhs_type} a {sym.type} en '{name}'.",
+                            line=ctx.start.line, column=ctx.start.column))
+                        log_semantic(f"[assign] ERROR: tipos incompatibles para '{name}'")
+                        self.v.emitter.temp_pool.resetPerStatement()
+                        return
+
+                    p, _ = self.v.exprs.deepPlace(exprs[1])
+                    rhs_place = p or exprs[1].getText()
+                    self.v.emitter.emit(Op.ASSIGN, arg1=rhs_place, res=name)
+                    log_semantic(f"[TAC] emitido: {name} = {rhs_place}")
+                    self.v.emitter.temp_pool.resetPerStatement()
+                    return
+
+            # Si llegamos aquí, no reconocimos patrón en ExpressionContext
+            log_semantic("[assign] ExpressionContext sin patrón reconocido (no index, no ident simple); nada emitido")
+            self.v.emitter.temp_pool.resetPerStatement()
+            return
+
+        # --- A partir de aquí: comportamiento original con AssignmentContext ---
+
+        # (1) variable simple
         if n == 1 and ctx.Identifier() is not None:
             name = ctx.Identifier().getText()
             sym = self.v.scopeManager.lookup(name)
@@ -546,7 +711,6 @@ class StatementsAnalyzer:
                 self.v.emitter.temp_pool.resetPerStatement()
                 return
 
-            # --- TAC ---
             p, _ = self.v.exprs.deepPlace(exprs[0])
             rhs_place = p or exprs[0].getText()
             self.v.emitter.emit(Op.ASSIGN, arg1=rhs_place, res=name)
@@ -554,7 +718,7 @@ class StatementsAnalyzer:
             self.v.emitter.temp_pool.resetPerStatement()
             return
 
-        # --- 2) Indexación simple: v[i] = expr ---
+        # (0) escritura indexada simple: v[i] = expr
         if n == 2:
             m = self.matchSimpleIndexAssign(exprs[0])
             if m is not None:
@@ -579,7 +743,15 @@ class StatementsAnalyzer:
                     self.v.emitter.temp_pool.resetPerStatement()
                     return
 
-                idx_t = self.v.visit(idx_node)
+                # Usar la expresión interna del índice
+                try:
+                    idx_expr = idx_node.expression()
+                except Exception:
+                    idx_expr = None
+                if idx_expr is None:
+                    idx_expr = idx_node
+
+                idx_t = self.v.visit(idx_expr)
                 rhs_t = self.v.visit(rhs_node)
                 elem_t = arr_t.elem_type
 
@@ -597,8 +769,8 @@ class StatementsAnalyzer:
                     self.v.emitter.temp_pool.resetPerStatement()
                     return
 
-                p_idx, it_idx = self.v.exprs.deepPlace(idx_node)
-                idx_place = p_idx or idx_node.getText()
+                p_idx, it_idx = self.v.exprs.deepPlace(idx_expr)
+                idx_place = p_idx or idx_expr.getText()
                 p_rhs, it_rhs = self.v.exprs.deepPlace(rhs_node)
                 rhs_place = p_rhs or rhs_node.getText()
 
@@ -616,11 +788,16 @@ class StatementsAnalyzer:
                 self.v.emitter.temp_pool.resetPerStatement()
                 return
 
-        # --- 3) Propiedad de objeto: obj.prop = expr ---
+        # (2) propiedad: obj.prop = expr (solo cuando hay Identifier() en ctx)
         if n == 2:
-            lhs_obj, rhs_exp = exprs[0], exprs[1]
-            prop_tok = ctx.Identifier()
-            prop_name = getattr(prop_tok, "getText", lambda: "<prop>")()
+            lhs_obj = exprs[0]
+            rhs_exp = exprs[1]
+
+            prop_tok = getattr(ctx, "Identifier", lambda: None)()
+            try:
+                prop_name = prop_tok.getText() if prop_tok is not None else "<prop>"
+            except Exception:
+                prop_name = "<prop>"
 
             obj_t = self.v.visit(lhs_obj)
             if not isinstance(obj_t, ClassType):
@@ -668,6 +845,7 @@ class StatementsAnalyzer:
 
             self.v.emitter.temp_pool.resetPerStatement()
             return
+
 
 
     # ------------------------------------------------------------------
