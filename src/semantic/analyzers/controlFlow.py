@@ -593,7 +593,7 @@ class ControlFlowAnalyzer:
     def visitSwitchStatement(self, ctx):
         log_semantic("[switch] visitSwitchStatement iniciado")
 
-        # Semántica: validar tipos de 'case' contra el discriminante
+        # ---------- Semántica: validar tipos de 'case' contra el discriminante ----------
         discr = first_switch_discriminant(ctx)
         if discr is None:
             log_semantic("[switch] no se encontró expresión discriminante; se omite emisión.")
@@ -611,46 +611,90 @@ class ControlFlowAnalyzer:
                         f"Tipo de 'case' ({et}) incompatible con el 'switch' ({scrutinee_t}).",
                         line=e.start.line, column=e.start.column))
 
-        # TAC: armado de casos / default
+        # ---------- TAC: preparar casos / default ----------
         discr_text = discr.getText()
         log_semantic(f"[switch] discriminante texto: {discr_text}")
 
-        case_block = safe_attr(ctx, "caseBlock") or safe_attr(ctx, "cases") or safe_attr(ctx, "switchBlock")
+        StmtCtx = getattr(CompiscriptParser, "StatementContext", None)
+        ExprCtx = getattr(CompiscriptParser, "ExpressionContext", None)
+
+        def gather_statements(node):
+            """Devuelve lista de StatementContext dentro de node (búsqueda robusta)."""
+            out = []
+            if node is None:
+                return out
+            # API directa
+            stmts = as_list(safe_attr(node, "statement"))
+            if stmts:
+                return stmts
+            # Fallback: recorrido profundo
+            try:
+                for ch in self.walk(node):
+                    if StmtCtx is not None and isinstance(ch, StmtCtx):
+                        out.append(ch)
+            except Exception:
+                pass
+            return out
+
+        def first_child_expression(node):
+            """Primera Expression dentro de node (para el 'case N:')."""
+            if node is None:
+                return None
+            # API directa
+            e = safe_attr(node, "expression")
+            if e is not None:
+                try:
+                    seq = list(e)  # por si devuelve iterable
+                    if seq:
+                        return seq[0]
+                except TypeError:
+                    return e
+            # Fallback
+            try:
+                for ch in self.walk(node):
+                    if ExprCtx is not None and isinstance(ch, ExprCtx):
+                        return ch
+            except Exception:
+                pass
+            return None
+
+        # === Camino específico a tu AST: hijos SwitchCase/DefaultCase de SwitchStatement ===
         cases: list[tuple[Any, list[Any]]] = []
         default_stmts: list[Any] | None = None
-        recogio_estructurado = False
 
-        if case_block is not None:
-            case_clauses = as_list(safe_attr(case_block, "caseClause"))
-            if case_clauses:
-                recogio_estructurado = True
-                for cc in case_clauses:
-                    ce = safe_attr(cc, "expression") or safe_attr(cc, "caseExpr") or safe_attr(cc, "constExpr")
-                    sts = as_list(safe_attr(cc, "statement")) or as_list(safe_attr(cc, "statements"))
-                    cases.append((ce, sts))
-                    log_semantic(f"[switch] caso agregado: {ce.getText()} con {len(sts)} statements")
-
-            dcl = safe_attr(case_block, "defaultClause")
-            if dcl is not None:
-                recogio_estructurado = True
-                default_stmts = as_list(safe_attr(dcl, "statement")) or as_list(safe_attr(dcl, "statements"))
+        # Itera hijos directos del switch buscando SwitchCase/DefaultCase
+        for ch in getattr(ctx, "getChildren", lambda: [])():
+            cname = type(ch).__name__
+            if cname in ("SwitchCaseContext", "SwitchCase"):
+                ce = first_child_expression(ch)
+                if ce is None:
+                    # seguridad: si falla, usa el discriminante (no se cumplirá jamás, pero no rompe índices)
+                    log_semantic("[switch] WARNING: SwitchCase sin expresión; se usa fallback.")
+                    ce = discr
+                sts = gather_statements(ch)
+                cases.append((ce, sts))
+                log_semantic(f"[switch] caso agregado: {ce.getText()} con {len(sts)} statements")
+            elif cname in ("DefaultCaseContext", "DefaultCase"):
+                default_stmts = gather_statements(ch)
                 log_semantic(f"[switch] default agregado con {len(default_stmts)} statements")
 
-        if not recogio_estructurado:
-            case_exprs = self.collectCaseExprs(ctx)
-            if not case_exprs and not has_default_clause(ctx):
-                log_semantic("[switch] aviso: no se detectaron 'case' ni 'default'; no se emite TAC.")
-                return {"terminated": False, "reason": None}
-            cases = [(e, []) for e in case_exprs]
-            default_stmts = [] if has_default_clause(ctx) else None
-            log_semantic(f"[switch] casos detectados dinámicamente: {len(cases)}, default={default_stmts is not None}")
+        # Si por alguna razón no se detectó nada, usa último fallback (exprs sin statements)
+        if not cases and default_stmts is None:
+            exprs = self.collectCaseExprs(ctx)
+            if exprs:
+                cases = [(e, []) for e in exprs]
+            if has_default_clause(ctx):
+                default_stmts = []
+            log_semantic(f"[switch] fallback final: cases={len(cases)}, default={default_stmts is not None}")
 
+        # ---------- Etiquetas y saltos ----------
         lend = self.v.emitter.newLabel("Lend")
         ldef = self.v.emitter.newLabel("Ldef") if default_stmts is not None else lend
         lcases = [self.v.emitter.newLabel("Lcase") for _ in cases]
 
         log_semantic(f"[switch] etiquetas generadas: lend={lend}, ldef={ldef}, lcases={lcases}")
 
+        # Comparaciones: discr == caseExpr -> Lcase_i
         for (cexpr, _), lcase in zip(cases, lcases):
             cond_text = f"{discr_text} == {cexpr.getText()}"
             self.v.emitter.emitIfGoto(cond_text, lcase)
@@ -658,27 +702,43 @@ class ControlFlowAnalyzer:
         self.v.emitter.emitGoto(ldef)
         log_semantic(f"[switch] emitGoto default/end: {ldef}")
 
+        # Contexto para 'break' dentro del switch
         self.switch_ctx_stack.append({"break": lend, "continue": lend})
         log_semantic(f"[switch] contexto stack actualizado: break={lend}, continue={lend}")
 
+        # Emitir cada case + sus statements (fall-through natural si no hay 'break')
         for (_, st_list), lcase in zip(cases, lcases):
+            # Si la rama anterior terminó (p. ej. por 'break'), reabrimos el flujo
+            self.v.emitter.clearFlowTermination()
             self.v.emitter.emitLabel(lcase)
             log_semantic(f"[switch] etiqueta caso emitida: {lcase}")
             for st in st_list:
                 self.v.visit(st)
 
+
+        # Default (si existe)
         if default_stmts is not None:
+            # Reabrir flujo por si el último 'case' terminó
+            self.v.emitter.clearFlowTermination()
             self.v.emitter.emitLabel(ldef)
             log_semantic(f"[switch] etiqueta default emitida: {ldef}")
             for st in default_stmts:
                 self.v.visit(st)
 
+
+        # Cierre
         self.v.emitter.emitLabel(lend)
         self.v.emitter.clearFlowTermination()
         self.switch_ctx_stack.pop()
         log_semantic("[switch] fin switch; etiquetas y contexto limpiados")
 
+        # Limpiamos ese sello para que el bloque contenedor no crea que el flujo terminó aquí si hay un break en un case
+        self.v.stmt_just_terminated = None
+        self.v.stmt_just_terminator_node = None
+
         return {"terminated": False, "reason": None}
+
+
 
     # ---------- break / continue ----------
     @log_function
