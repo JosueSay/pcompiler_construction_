@@ -70,7 +70,7 @@ class ClassesAnalyzer:
             rtype = VoidType()
         log_semantic(f"[method] return type: {rtype if rtype else 'void?'}")
 
-        # --- Override check ---
+        # --- Override check (igual que antes) ---
         def normalize_ret(rt):
             return rt if rt is not None else VoidType()
 
@@ -101,7 +101,7 @@ class ClassesAnalyzer:
                         line=ctx_fn.start.line, column=ctx_fn.start.column))
                     log_semantic(f"[override] firma inválida detectada en {qname}")
 
-        # 3) Registrar símbolo + registry
+        # 3) Registrar símbolo + registry (igual que antes)
         try:
             fsym = self.v.scopeManager.addSymbol(
                 qname,
@@ -136,18 +136,41 @@ class ClassesAnalyzer:
         expected_r = rtype if rtype is not None else VoidType()
         self.v.fn_stack.append(expected_r)
 
+        # --- TAC: prólogo (label + enter 0) ---
+        self.v.emitter.clearFlowTermination()
+        self.v.emitter.beginFunction(fsym.label, 0)
+        enter_quad = self.v.emitter.quads[-1]
+        log_semantic(f"[TAC] beginFunction (method): label={fsym.label}, frame_size provisional=0")
+
+        # Guardar/limpiar flags de terminación del bloque exterior
         saved_term = self.v.stmt_just_terminated
         saved_node = getattr(self.v, "stmt_just_terminator_node", None)
         self.v.stmt_just_terminated = None
         self.v.stmt_just_terminator_node = None
+
+        # 5) Visitar cuerpo
         try:
-            self.v.visit(ctx_fn.block())
+            block_result = self.v.visit(ctx_fn.block())
         finally:
+            # Restaurar flags externos
             self.v.stmt_just_terminated = saved_term
             self.v.stmt_just_terminator_node = saved_node
 
+        # Si es void y no terminó el flujo, return implícito
+        from semantic.custom_types import VoidType as _VT  # evitar confusión local
+        if isinstance(expected_r, _VT) and (not block_result or not block_result.get("terminated")):
+            self.v.emitter.endFunctionWithReturn(None)
+            log_semantic(f"[TAC] return implícito en método/ctor {qname}")
+
+        # 6) Cierre de función: parchar frame_size real en 'enter'
         self.v.fn_stack.pop()
-        size = self.v.scopeManager.exitScope()
-        self.v.in_method = False
+        size = self.v.scopeManager.closeFunctionScope(fsym)  # setea fsym.local_frame_size
         log_semantic(f"[scope] método '{qname}' cerrado; frame_size={size} bytes")
-        return None
+        try:
+            enter_quad.arg2 = str(size)
+        except Exception:
+            pass
+
+        self.v.in_method = False
+        self.v.emitter.clearFlowTermination()
+        return block_result
