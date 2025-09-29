@@ -3,7 +3,7 @@
 let a: integer = 1;                 // ok
 let s: string  = "hola";            // ok
 let b: boolean = true;              // ok
-let greet: string = "Hola " + "mundo"; // ok: string + string
+let greet: string = "Hola " + "mundo" ; // ok: string + string
 
 let x: integer;                     // ok: declaración sin init (permitida)
 // x = "hola";                     // ERROR: asignación string → integer
