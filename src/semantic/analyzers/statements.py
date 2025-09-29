@@ -333,9 +333,14 @@ class StatementsAnalyzer:
         rhs_place = p_rhs or rhs_node.getText()
         log_semantic(f"[INDEX_STORE] tipos -> arr:{arr_t}, idx:{idx_t}, rhs:{rhs_t}")
         log_semantic(f"[INDEX_STORE] deepPlace -> idx='{idx_place}', rhs='{rhs_place}'")
+        
+        
+        t_len, l_ok = self.v.emitter.emitBoundsCheck(idx_place, base_name)
 
         self.v.emitter.emit(Op.INDEX_STORE, arg1=base_name, res=rhs_place, label=idx_place)
         log_semantic(f"[INDEX_STORE] emitido: {base_name}[{idx_place}] = {rhs_place}")
+        
+        self.v.emitter.temp_pool.free(t_len, "*")
 
         # 5) liberar temporales usados en idx/rhs si aplica
         if it_idx:
@@ -479,9 +484,13 @@ class StatementsAnalyzer:
         log_semantic(f"[PROP_INDEX_STORE] tipos -> arr:{field_t}, idx:{idx_t}, rhs:{rhs_t}")
         log_semantic(f"[PROP_INDEX_STORE] deepPlace -> idx='{idx_place}', rhs='{rhs_place}'")
 
+        t_len, l_ok = self.v.emitter.emitBoundsCheck(idx_place, t_arr)
+
         # 6) INDEX_STORE t_arr[idx] = rhs
         self.v.emitter.emit(Op.INDEX_STORE, arg1=t_arr, res=rhs_place, label=idx_place)
         log_semantic(f"[PROP_INDEX_STORE] emitido: {t_arr}[{idx_place}] = {rhs_place}")
+        
+        self.v.emitter.temp_pool.free(t_len, "*")
 
         # 7) liberar temporales
         if it_idx:

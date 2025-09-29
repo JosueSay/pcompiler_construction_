@@ -127,8 +127,14 @@ class LValuesAnalyzer:
 
                 idx_place = getattr(suf.expression(), "_place", suf.expression().getText())
                 t = self.v.emitter.temp_pool.newTemp(self.v.exprs.typeToTempKind(base_type.elem_type))
+                
+                t_len, l_ok = self.v.emitter.emitBoundsCheck(idx_place, base_place)
+                
                 log_semantic(f"[lvalue] emitting INDEX_LOAD: {base_place}[{idx_place}] -> {t}")
                 self.v.emitter.emit(Op.INDEX_LOAD, arg1=base_place, arg2=idx_place, res=t)
+                
+                self.v.emitter.temp_pool.free(t_len, "*")
+                
                 if getattr(suf.expression(), "_is_temp", False):
                     self.v.emitter.temp_pool.free(idx_place, "*")
 
