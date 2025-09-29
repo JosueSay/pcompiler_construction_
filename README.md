@@ -88,11 +88,14 @@ src/
 
 Para habilitar **resaltado de sintaxis** de Compis Script en VS Code:
 
-1. Copia la extensión al directorio de VS Code:
+1. Instalar la extensión en windows:
 
-   ```bash
-   cd ide/
-   cp -r cps ~\.vscode\extensions\
-   ```
+    ```bash
+    cd ide/
+    ```
 
-2. Cierra y vuelve a abrir VS Code.
+    ```bash
+    $dest="$env:USERPROFILE\.vscode\extensions\cps"; try { New-Item -ItemType Directory -Force $dest | Out-Null; Copy-Item -Recurse -Force .\cps\* $dest -ErrorAction Stop; Write-Host "✅ Extensión instalada/actualizada en $dest" -ForegroundColor Green } catch { Write-Host "❌ Error: $($_.Exception.Message)" -ForegroundColor Red; exit 1 }
+    ```
+
+3. Cierra y vuelve a abrir VS Code.
