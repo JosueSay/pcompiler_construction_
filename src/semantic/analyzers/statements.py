@@ -119,13 +119,29 @@ class StatementsAnalyzer:
         if lhs_ctx is None:
             return None
 
-        idx_node = self.findDesc(lhs_ctx, CompiscriptParser.IndexExprContext)
-        if idx_node is not None:
-            base_name = lhs_ctx.primaryAtom().getText()
-            log_semantic(f"matchSimpleIndexAssign -> encontrado {base_name}[{idx_node.getText()}]")
-            return (base_name, idx_node)
+        # Texto del LHS (ej: "a[i]", "this.data[i]")
+        try:
+            lhs_txt = lhs_ctx.getText()
+        except Exception:
+            return None
 
-        return None
+        # Debe verse como VAR[...], sin puntos y sin 'this'
+        brk = lhs_txt.find('[')
+        if brk <= 0:
+            return None
+        base_txt = lhs_txt[:brk]
+
+        # Si es 'this' o contiene '.' (p. ej. this.data[i], a.b[i]), NO usar el atajo
+        if base_txt == 'this' or '.' in base_txt:
+            return None
+
+        # Asegura que realmente hay un IndexExpr
+        idx_node = self.findDesc(lhs_ctx, CompiscriptParser.IndexExprContext)
+        if idx_node is None:
+            return None
+
+        # Base es un identificador simple
+        return (base_txt, idx_node)
 
     @log_function
     def rhsOfAssignExpr(self, expr_ctx):
@@ -319,8 +335,137 @@ class StatementsAnalyzer:
             self.v.emitter.temp_pool.free(idx_place, "*")
         if it_rhs:
             self.v.emitter.temp_pool.free(rhs_place, "*")
+            
+    @log_function
+    def matchPropertyIndexAssign(self, lhs_or_expr_node):
+        """
+        Detecta LHS de la forma  OBJ.PROP[ idx ]  (p. ej. this.data[i], b.buf[j])
+        Retorna: (obj_txt, prop_name, idx_node)  o None
+        """
+        log_semantic(f"matchPropertyIndexAssign -> lhs_or_expr_node={lhs_or_expr_node}")
 
+        lhs_ctx = self.findDesc(lhs_or_expr_node, CompiscriptParser.LeftHandSideContext)
+        if lhs_ctx is None:
+            return None
 
+        try:
+            lhs_txt = lhs_ctx.getText()  # ej: "this.data[i]"
+        except Exception:
+            return None
+
+        brk = lhs_txt.find('[')
+        if brk <= 0:
+            return None
+        base_txt = lhs_txt[:brk]        # "this.data" | "obj.prop" | "a.b.c" (rechazaremos anidados)
+        if '.' not in base_txt:
+            return None  # esto lo maneja matchSimpleIndexAssign
+
+        # Aceptamos exactamente OBJ.PROP (un solo '.'); si hay más niveles, que lo maneje el camino general
+        parts = base_txt.split('.')
+        if len(parts) != 2:
+            return None
+        obj_txt, prop_name = parts[0], parts[1]
+        if not prop_name:
+            return None
+
+        # Debe existir realmente el IndexExpr
+        idx_node = self.findDesc(lhs_ctx, CompiscriptParser.IndexExprContext)
+        if idx_node is None:
+            return None
+
+        return (obj_txt, prop_name, idx_node)
+
+    @log_function
+    def handlePropertyIndexStore(self, obj_txt, prop_name, idx_node, rhs_node, ctx_stmt):
+        """
+        Genera: t_arr = (FIELD_LOAD obj.prop); INDEX_STORE t_arr[idx] = rhs
+        Tipado y chequeos siguiendo tu estilo.
+        """
+        log_semantic(f"handlePropertyIndexStore -> inicio: {obj_txt}.{prop_name}[{idx_node.getText()}] = {rhs_node.getText()}")
+
+        # 1) Resolver tipo/‘place’ del objeto (solo soportamos 'this' o un identificador de clase)
+        if obj_txt == 'this':
+            obj_place = 'this'
+            # tipo de 'this' es la clase actual
+            if not self.v.class_stack:
+                self.v.appendErr(SemanticError(f"Uso de 'this' fuera de una clase.", line=ctx_stmt.start.line, column=ctx_stmt.start.column))
+                return
+            obj_type = self.v.class_stack[-1]  # nombre de clase
+            obj_type = ClassType(obj_type)
+        else:
+            sym = self.v.scopeManager.lookup(obj_txt)
+            if sym is None:
+                self.v.appendErr(SemanticError(
+                    f"Uso de variable no declarada: '{obj_txt}'",
+                    line=ctx_stmt.start.line, column=ctx_stmt.start.column))
+                return
+            if getattr(sym, "category", None) == SymbolCategory.CONSTANT:
+                self.v.appendErr(SemanticError(
+                    f"No se puede modificar la constante '{obj_txt}'.",
+                    line=ctx_stmt.start.line, column=ctx_stmt.start.column))
+                return
+            obj_place = obj_txt
+            obj_type = getattr(sym, "type", None)
+
+        # 2) Verificar que prop exista y sea arreglo
+        try:
+            field_t = self.v.class_handler.get_attribute_type(obj_type.name, prop_name)
+        except Exception:
+            field_t = None
+        if field_t is None:
+            self.v.appendErr(SemanticError(
+                f"La clase {obj_type} no tiene un atributo '{prop_name}'.",
+                line=ctx_stmt.start.line, column=ctx_stmt.start.column))
+            return
+        if not isinstance(field_t, ArrayType):
+            self.v.appendErr(SemanticError(
+                f"Asig. indexada sobre un no-arreglo: '{obj_txt}.{prop_name}' es {field_t}.",
+                line=ctx_stmt.start.line, column=ctx_stmt.start.column))
+            return
+
+        # 3) Normalizar/visitar índice y rhs (sin emitir stores todavía)
+        try:
+            idx_expr = idx_node.expression()
+        except Exception:
+            idx_expr = idx_node
+        idx_t = self.v.visit(idx_expr)
+        rhs_t = self.v.visit(rhs_node)
+
+        if not isinstance(idx_t, IntegerType):
+            self.v.appendErr(SemanticError(
+                f"Índice no entero en asig. de arreglo: se encontró {idx_t}.",
+                line=ctx_stmt.start.line, column=ctx_stmt.start.column))
+            return
+        elem_t = field_t.elem_type
+        if rhs_t is None or isinstance(rhs_t, ErrorType) or not isAssignable(elem_t, rhs_t):
+            self.v.appendErr(SemanticError(
+                f"Asignación incompatible: no se puede asignar {rhs_t} a {elem_t} en {obj_txt}.{prop_name}[i].",
+                line=ctx_stmt.start.line, column=ctx_stmt.start.column))
+            return
+
+        # 4) FIELD_LOAD obj.prop -> t_arr
+        t_arr = self.v.exprs.newTempFor(field_t)   # <-- antes: newTemp(...)
+        self.v.emitter.emit(Op.FIELD_LOAD, arg1=obj_place, res=t_arr, label=prop_name)
+        log_semantic(f"[PROP_INDEX_STORE] FIELD_LOAD: {obj_txt}.{prop_name} -> {t_arr}")
+
+        # 5) deepPlace de idx y rhs
+        p_idx, it_idx = self.v.exprs.deepPlace(idx_expr)
+        idx_place = p_idx or idx_expr.getText()
+        p_rhs, it_rhs = self.v.exprs.deepPlace(rhs_node)
+        rhs_place = p_rhs or rhs_node.getText()
+        log_semantic(f"[PROP_INDEX_STORE] tipos -> arr:{field_t}, idx:{idx_t}, rhs:{rhs_t}")
+        log_semantic(f"[PROP_INDEX_STORE] deepPlace -> idx='{idx_place}', rhs='{rhs_place}'")
+
+        # 6) INDEX_STORE t_arr[idx] = rhs
+        self.v.emitter.emit(Op.INDEX_STORE, arg1=t_arr, res=rhs_place, label=idx_place)
+        log_semantic(f"[PROP_INDEX_STORE] emitido: {t_arr}[{idx_place}] = {rhs_place}")
+
+        # 7) liberar temporales
+        if it_idx:
+            self.v.emitter.temp_pool.free(idx_place, "*")
+        if it_rhs:
+            self.v.emitter.temp_pool.free(rhs_place, "*")
+            
 
     # ------------------------------------------------------------------
     # Sentencia de expresión
@@ -337,24 +482,29 @@ class StatementsAnalyzer:
         log_semantic(f"[stmt] detectado assignment={is_assign}")
 
         if is_assign:
-            log_semantic("[stmt] assignment detectado")
-
-            # Caso simple indexado
+            # 1) v[i] = rhs
             m = self.matchSimpleIndexAssign(expr)
             if m is not None:
                 base_name, idx_node = m
                 rhs_node = self.rhsOfAssignExpr(expr)
                 if rhs_node is not None:
-                    log_semantic(f"[stmt] matchSimpleIndexAssign -> base='{base_name}', idx='{idx_node.getText()}', rhs='{rhs_node.getText()}'")
                     self.handleSimpleIndexStore(base_name, idx_node, rhs_node, ctx)
-                    log_semantic("[stmt] salida visitExpressionStatement (INDEX_STORE emitido)")
                     return None
 
-            # Fallback
-            log_semantic("[stmt] fallback visitAssignment(expr)")
+            # 2) obj.prop[i] = rhs  (incluye this.prop[i])
+            mp = self.matchPropertyIndexAssign(expr)
+            if mp is not None:
+                obj_txt, prop_name, idx_node = mp
+                rhs_node = self.rhsOfAssignExpr(expr)
+                if rhs_node is not None:
+                    self.handlePropertyIndexStore(obj_txt, prop_name, idx_node, rhs_node, ctx)
+                    return None
+
+            # 3) fallback
             self.visitAssignment(expr)
             self.v.emitter.temp_pool.resetPerStatement()
             return None
+
 
         t = self.v.visit(expr)
         log_semantic(f"[stmt] visitExpressionStatement: tipo expr='{t}'")
@@ -420,6 +570,7 @@ class StatementsAnalyzer:
 
         log_semantic(f"[block] salida visitBlock -> terminated={terminated_in_block}, reason={terminator_reason}")
         return {"terminated": terminated_in_block, "reason": terminator_reason}
+
 
     # ------------------------------------------------------------------
     # Declaraciones: let / const (con emisión TAC para inicializadores)
@@ -628,6 +779,7 @@ class StatementsAnalyzer:
 
         # Limpiar temporales por sentencia
         self.v.emitter.temp_pool.resetPerStatement()
+
 
     # ------------------------------------------------------------------
     # Asignaciones: var = expr  |  obj.prop = expr
@@ -888,7 +1040,6 @@ class StatementsAnalyzer:
 
             self.v.emitter.temp_pool.resetPerStatement()
             return
-
 
 
     # ------------------------------------------------------------------
