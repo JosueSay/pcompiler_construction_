@@ -10,3 +10,7 @@ src/
        ├── symbol_table.py        # Implementación de tabla de símbolos
        └── types.py               # Tipos de datos y utilidades de validación
 ```
+
+## Enlaces
+
+- Video de YouTube

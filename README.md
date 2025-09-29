@@ -1,8 +1,8 @@
 # Compis Script 🧠
 
-## 🛠️ Entorno de desarrollo
+Pequeño compilador/analizador para **Compis Script**: gramática ANTLR, análisis semántico y generación de **TAC (Three Address Code)** con reportes HTML (AST y tabla de símbolos).
 
-Este proyecto utiliza las siguientes herramientas. Ten en cuenta que las versiones pueden cambiar en el futuro por motivos de compatibilidad:
+## 🛠️ Entorno de desarrollo
 
 - **ANTLR Parser Generator**: v4.13.1  
 - **Python**: 3.10.12  
@@ -10,68 +10,79 @@ Este proyecto utiliza las siguientes herramientas. Ten en cuenta que las version
 - **Docker**: 28.3.0 (build 38b7060)  
 - **WSL2 (Windows Subsystem for Linux)**: v22.4.5 (o superior)  
 
-## 🚀 Configuración y ejecución
-
-Desde la raíz del repositorio, ejecuta el siguiente comando para configurar el entorno de desarrollo:
+## ⚡️ Quickstart
 
 ```bash
-./setup.sh
+# 1) Instalar deps
+./scripts/setup.sh
+
+# 2) Generar lexer/parser de ANTLR -> antlr_gen/
+./scripts/generate_code_py.sh
+
+# 3) Ejecutar un test (por defecto program.cps si no pasas archivo)
+CPS_VERBOSE=0 ./scripts/run.sh src/test/program.cps
 ```
 
-Este script crea un entorno virtual de Python e instala todas las dependencias necesarias.
-
-### Generar código con ANTLR
-
-Una vez configurado el entorno, puedes generar el código en Python para el *lexer* y *parser* a partir de la gramática ANTLR:
-
-```bash
-./generate_code_py.sh
-```
-
-Este comando usa la gramática `Compiscript.g4` y genera los archivos dentro del directorio `antlr_gen/`.
+> `CPS_VERBOSE` por defecto es **0**. Usa **1** para logs detallados (tarda más).
 
 ## ▶️ Ejecución de pruebas
 
-Para ejecutar un programa de prueba, coloca los archivos en la carpeta `src/test/...` y utiliza el comando:
+- **Un test específico**
+
+  ```bash
+  CPS_VERBOSE=0 ./scripts/run.sh src/test/program.cps
+  CPS_VERBOSE=1 ./scripts/run.sh src/test/program.cps
+  ```
+
+- **Crear/borrar lote específico** (ej. `tac`)
+
+  ```bash
+  ./src/test/tac/00-create_files.sh
+  ./src/test/tac/01-drop_files.sh
+  ```
+
+- **Correr lote** (por defecto usa `src/test/tac/`, editable en `./scripts/run_files.sh`)
+
+  ```bash
+  ./scripts/run_files.sh
+  ```
+
+- **Crear/Borrar TODOS los tests**
+
+  ```bash
+  ./scripts/create_all.sh
+  ./scripts/drop_all.sh
+  ```
+
+> Más detalles en `src/test/README.md` (tipos de pruebas por carpeta) y significado de los scripts en `scripts/`.
+
+## 🧾 Logs y reportes
+
+Cada ejecución crea:
+
+- Carpeta: `src/logs/out/<timestamp>_<archivo>.cps/`
+- Archivos:
+
+  - `ast.txt` y `ast.html` -> Árbol sintáctico.
+  - `program.tac` y `program.tac.html` -> TAC.
+  - `symbols.log` y `symbols.html` -> Tabla de símbolos.
+  - `workflow.log` -> trazas de depuración.
+
+## 📁 Estructura
 
 ```bash
-CPS_VERBOSE=0 ./scripts/run.sh src/test/functions/all_in_one.cps 
+antlr_gen/          # Código generado por ANTLR (Python)
+docs/               # Diseño y notas (semántica, TAC, etc.)
+ide/cps/            # Extensión VS Code (syntax highlight, parser JS)
+scripts/            # setup, generate, run, batch (create_all/drop_all)
+src/
+  driver.py         # Punto de entrada
+  ir/               # TAC, labels, temporales, RA, emitter
+  logs/             # Logger + reporters (HTML)
+  semantic/         # Análisis semántico (visitor, scopes, tipos)
+  test/             # Suites de pruebas (+ scripts por carpeta)
+  utils/            # Gramática ANTLR (Compiscript.g4)
 ```
-
-### Parámetro `CPS_VERBOSE`
-
-- **0** -> No genera logs del procedimiento semántico.
-- **1** -> Genera un log detallado en la carpeta `src/logs/out`.
-
-## 📂 Archivos generados en `src/logs/out`
-
-Al ejecutar con logs habilitados, se generan los siguientes archivos:
-
-- **`*ast.html`** -> Visualización en HTML del árbol sintáctico (AST).
-- **`*symbols.html`** -> Tabla de símbolos en HTML.
-- **`*semantic.log`** -> Registro detallado del proceso semántico.
-- **`*symbols.log`** -> Tabla de símbolos en texto plano.
-- **`*ast.txt`** -> Representación del AST en texto (base para el HTML).
-
-## 🌐 Visualización en navegador
-
-Para visualizar los resultados:
-
-1. Instala la extensión **Live Server** en VS Code.
-
-   ![Live Server](./images/liveserver.png)
-
-2. Haz clic en el botón **"Go Live"** (parte inferior derecha de VS Code).
-
-   ![Go Live](./images/GoLive.png)
-
-3. Abre en tu navegador la dirección:
-
-   ```bash
-   Visitar http://172.20.112.1:5500/src/logs/out/ para abrir los archivos correspondientes
-   ```
-
-4. Selecciona el archivo HTML que quieras visualizar.
 
 ## 🎨 Extensión para Compis Script en VS Code
 
