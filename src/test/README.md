@@ -1,42 +1,79 @@
-# Tests de Compiscript
+# 🧪 Carpeta de Tests
 
-## Cómo correr
+En esta carpeta se encuentran todos los **tests de la gramática y semántica** de Compiscript.  
+Cada subcarpeta contiene scripts para **crear** y **eliminar** sus archivos de prueba:
 
-* **Un test**:
+- `00-create_files.sh` -> crea los tests `.cps`.  
+- `01-drop_files.sh` -> elimina los tests creados.  
 
-  ```bash
-  CPS_VERBOSE=0 ./scripts/run.sh src/test/<carpeta>/<archivo>.cps
-  ```
+> Nota: los archivos `.sh` se deben ejecutar desde la raiz del repositorio.
 
-* **Todos los tests**:
+## ▶️ Ejecución de tests
 
-  ```bash
-  find src/test -name "*.cps" -print0 | xargs -0 -n1 -I{} bash -c 'CPS_VERBOSE=0 ./scripts/run.sh "{}"'
-  ```
+### Crear o eliminar tests de una carpeta específica
 
-* Los artefactos (AST/tabla de símbolos/log) quedan en `src/logs/out/`. El script muestra una URL local para verlos.
-
-## Convenciones
-
-* **Éxito:** archivos `success_*.cps` → no deben emitir `SemanticError` ni `DeadCode`.
-* **Error:** archivos `error_*.cps` → deben emitir al menos un diagnóstico esperado (ejemplos:
-  `Número de argumentos inválido`, `Uso de variable no declarada`, `Tipo de 'case' incompatible`, `Código inalcanzable`, etc.).
-* **Un caso por archivo** (máx. 10–20 líneas) para aislar fallos.
-* **Sin `float`**: la gramática no lo soporta; no crear casos con `float`.
-
-## Estructura
+Ejemplo con los de **TAC**:
 
 ```bash
-test/
-  smoke/                      # sanity checks mínimos
-  literales_identificadores/  # literales y uso de identificadores
-  declaraciones_asignaciones/ # let/const, asignaciones, tipos
-  expresiones/                # aritmética, lógica, comparaciones
-  arreglos/                   # literales homogéneos, indexación
-  control_flujo/              # if/while/for/foreach/switch/break/continue
-  funciones/                  # params, retorno, recursión, closures
-  clases_objetos/             # atributos, métodos, constructor, herencia
-  generales/                  # reglas transversales (código muerto)
-  program.cps                 # programa demo integrado
-  debug.cps                   # espacio para pruebas ad-hoc
+./src/test/tac/00-create_files.sh
+./src/test/tac/01-drop_files.sh
 ```
+
+### Crear o eliminar **todos los tests**
+
+```bash
+./scripts/create_all.sh
+./scripts/drop_all.sh
+```
+
+### Ejecutar un test específico
+
+Por defecto se ejecuta `program.cps`, pero puedes correr uno en particular:
+
+```bash
+CPS_VERBOSE=0 ./scripts/run.sh src/carpeta/archivo.cps 
+CPS_VERBOSE=1 ./scripts/run.sh src/carpeta/archivo.cps
+```
+
+- `CPS_VERBOSE=0` (por defecto) -> ejecución rápida, sin logs extensivos.
+- `CPS_VERBOSE=1` -> genera logs detallados.
+
+### Ejecutar en lote
+
+Corre todos los archivos `.cps` dentro de `src/test/tac/` (esta ruta puede ser modificada dentro del archivo `run_files.sh`):
+
+```bash
+./scripts/run_files.sh
+```
+
+## 📂 Tipos de tests por carpeta
+
+- **`arreglos/`**
+  Validación de arreglos: índices válidos/erróneos, literales homogéneos/heterogéneos.
+
+- **`clases_objetos/`**
+  Definición de clases, constructores, métodos, herencia, acceso a atributos, `this`, errores comunes en propiedades.
+
+- **`control_flujo/`**
+  Uso de `if`, `while`, `for`, `switch`, incluyendo errores por condiciones no booleanas, `break` fuera de bucle, etc.
+
+- **`declaraciones_asignaciones/`**
+  Declaración de variables y constantes, inicialización, asignaciones correctas e incompatibles.
+
+- **`expresiones/`**
+  Operaciones aritméticas, lógicas y comparaciones. Casos válidos y errores por tipos incompatibles.
+
+- **`funciones/`**
+  Validación de firmas, número y tipo de parámetros, retornos correctos/incorrectos, recursión, closures.
+
+- **`generales/`**
+  Casos generales como **código muerto** (sentencias después de `return`).
+
+- **`literales_identificadores/`**
+  Uso correcto e incorrecto de literales, identificadores no declarados.
+
+- **`smoke/`**
+  Tests mínimos de humo: declaraciones simples, archivo vacío, etc.
+
+- **`tac/`**
+  Tests más completos de integración: expresiones, flujo de control, clases, arreglos, closures, manejo de OOB (out-of-bounds), generación de TAC en múltiples escenarios.
