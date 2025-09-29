@@ -96,6 +96,13 @@ class StatementsAnalyzer:
     @log_function
     def hasTopLevelAssign(self, expr_ctx) -> bool:
         log_semantic(f"hasTopLevelAssign -> expr_ctx={expr_ctx}")
+        # 1) preferente: ¿existe un AssignExpr en este árbol?
+        try:
+            if self.findDesc(expr_ctx, CompiscriptParser.AssignExprContext) is not None:
+                return True
+        except Exception:
+            pass
+        # 2) fallback textual (tu heurística)
         try:
             s = expr_ctx.getText()
         except Exception:
@@ -108,7 +115,7 @@ class StatementsAnalyzer:
             prev = s[i-1] if i > 0 else ''
             nxt  = s[i+1] if i+1 < len(s) else ''
             if prev not in ('=', '!', '<', '>') and nxt != '=':
-                log_semantic(f"hasTopLevelAssign -> '=' encontrado en top level")
+                log_semantic("hasTopLevelAssign -> '=' encontrado (fallback)")
                 return True
         return False
 
@@ -407,6 +414,14 @@ class StatementsAnalyzer:
             obj_place = obj_txt
             obj_type = getattr(sym, "type", None)
 
+            # si no es objeto, error claro
+            if not isinstance(obj_type, ClassType):
+                self.v.appendErr(SemanticError(
+                    f"Asig. indexada a propiedad en no-objeto: '{obj_type}'.",
+                    line=ctx_stmt.start.line, column=ctx_stmt.start.column))
+                return
+
+
         # 2) Verificar que prop exista y sea arreglo
         try:
             field_t = self.v.class_handler.get_attribute_type(obj_type.name, prop_name)
@@ -444,9 +459,17 @@ class StatementsAnalyzer:
             return
 
         # 4) FIELD_LOAD obj.prop -> t_arr
-        t_arr = self.v.exprs.newTempFor(field_t)   # <-- antes: newTemp(...)
-        self.v.emitter.emit(Op.FIELD_LOAD, arg1=obj_place, res=t_arr, label=prop_name)
+        t_arr = self.v.exprs.newTempFor(field_t)
+        qfld = self.v.emitter.emit(Op.FIELD_LOAD, arg1=obj_place, res=t_arr, label=prop_name)
         log_semantic(f"[PROP_INDEX_STORE] FIELD_LOAD: {obj_txt}.{prop_name} -> {t_arr}")
+        
+        try:
+            off = self.v.class_handler.get_field_offset(obj_type.name, prop_name)
+            if qfld is not None and off is not None:
+                setattr(qfld, "_field_offset", off)
+                setattr(qfld, "_field_owner", obj_type.name)
+        except Exception:
+            pass
 
         # 5) deepPlace de idx y rhs
         p_idx, it_idx = self.v.exprs.deepPlace(idx_expr)
@@ -465,6 +488,9 @@ class StatementsAnalyzer:
             self.v.emitter.temp_pool.free(idx_place, "*")
         if it_rhs:
             self.v.emitter.temp_pool.free(rhs_place, "*")
+
+        # liberar el temp del arreglo cargado
+        self.v.emitter.temp_pool.free(t_arr, "*")
             
 
     # ------------------------------------------------------------------
@@ -489,22 +515,23 @@ class StatementsAnalyzer:
                 rhs_node = self.rhsOfAssignExpr(expr)
                 if rhs_node is not None:
                     self.handleSimpleIndexStore(base_name, idx_node, rhs_node, ctx)
+                    self.v.emitter.temp_pool.resetPerStatement()   # ← añadir
                     return None
 
-            # 2) obj.prop[i] = rhs  (incluye this.prop[i])
+            # 2) obj.prop[i] = rhs (incluye this.prop[i])
             mp = self.matchPropertyIndexAssign(expr)
             if mp is not None:
                 obj_txt, prop_name, idx_node = mp
                 rhs_node = self.rhsOfAssignExpr(expr)
                 if rhs_node is not None:
                     self.handlePropertyIndexStore(obj_txt, prop_name, idx_node, rhs_node, ctx)
+                    self.v.emitter.temp_pool.resetPerStatement()   # ← añadir
                     return None
 
             # 3) fallback
             self.visitAssignment(expr)
             self.v.emitter.temp_pool.resetPerStatement()
             return None
-
 
         t = self.v.visit(expr)
         log_semantic(f"[stmt] visitExpressionStatement: tipo expr='{t}'")
@@ -637,7 +664,13 @@ class StatementsAnalyzer:
                         )
                     except Exception:
                         pass
-                    self.v.class_handler.add_attribute(current_class, name, declared_type)
+                    try:
+                        already = self.v.class_handler.get_attribute_type(current_class, name)
+                    except Exception:
+                        already = None
+                    if already is None:
+                        self.v.class_handler.add_attribute(current_class, name, declared_type)
+
                 self.v.emitter.temp_pool.resetPerStatement()
                 return
 
@@ -655,7 +688,13 @@ class StatementsAnalyzer:
                         )
                     except Exception:
                         pass
-                    self.v.class_handler.add_attribute(current_class, name, declared_type)
+                    try:
+                        already = self.v.class_handler.get_attribute_type(current_class, name)
+                    except Exception:
+                        already = None
+                    if already is None:
+                        self.v.class_handler.add_attribute(current_class, name, declared_type)
+
                 self.v.emitter.temp_pool.resetPerStatement()
                 return
 
@@ -680,8 +719,14 @@ class StatementsAnalyzer:
         # Registrar atributo de clase (si procede)
         if self.v.class_stack:
             current_class = self.v.class_stack[-1]
-            self.v.class_handler.add_attribute(current_class, name, declared_type)
-            log_semantic(f"[class.attr] {current_class}.{name}: {declared_type}")
+            try:
+                already = self.v.class_handler.get_attribute_type(current_class, name)
+            except Exception:
+                already = None
+            if already is None:
+                self.v.class_handler.add_attribute(current_class, name, declared_type)
+                log_semantic(f"[class.attr] {current_class}.{name}: {declared_type}")
+
 
         # TAC del inicializador
         if init is not None:
@@ -743,7 +788,13 @@ class StatementsAnalyzer:
                 pass
             if self.v.class_stack:
                 current_class = self.v.class_stack[-1]
-                self.v.class_handler.add_attribute(current_class, name, declared_type)
+                try:
+                    already = self.v.class_handler.get_attribute_type(current_class, name)
+                except Exception:
+                    already = None
+                if already is None:
+                    self.v.class_handler.add_attribute(current_class, name, declared_type)
+
             self.v.emitter.temp_pool.resetPerStatement()
             return
 
@@ -768,8 +819,14 @@ class StatementsAnalyzer:
         # Registrar atributo de clase (si procede)
         if self.v.class_stack:
             current_class = self.v.class_stack[-1]
-            self.v.class_handler.add_attribute(current_class, name, declared_type)
-            log_semantic(f"[class.attr] {current_class}.{name}: {declared_type}")
+            try:
+                already = self.v.class_handler.get_attribute_type(current_class, name)
+            except Exception:
+                already = None
+            if already is None:
+                self.v.class_handler.add_attribute(current_class, name, declared_type)
+                log_semantic(f"[class.attr] {current_class}.{name}: {declared_type}")
+
 
         # TAC del inicializador
         p, _ = self.v.exprs.deepPlace(expr_ctx)
@@ -815,7 +872,6 @@ class StatementsAnalyzer:
                 name = None
                 lhs_ctx = self.findDesc(exprs[0], CompiscriptParser.LeftHandSideContext)
                 if lhs_ctx is not None:
-                    # sin sufijos -> identificador pelado
                     has_suffix = False
                     try:
                         sufs = lhs_ctx.suffixOp()
@@ -823,10 +879,19 @@ class StatementsAnalyzer:
                     except Exception:
                         pass
                     if not has_suffix:
+                        # 1) intento clásico
                         try:
                             name = lhs_ctx.primaryAtom().getText()
                         except Exception:
                             name = None
+                        # 2) buscar un IdentifierExpr “pelado” como respaldo
+                        if not name:
+                            try:
+                                ident = self.findDesc(lhs_ctx, CompiscriptParser.IdentifierExprContext)
+                                if ident is not None:
+                                    name = ident.getText()
+                            except Exception:
+                                pass
 
                 if name:
                     sym = self.v.scopeManager.lookup(name)

@@ -113,10 +113,10 @@ c.inc();
 let g: integer = c.get();
 EOF
 
-cat <<'EOF' > "$TARGET_DIR/this_y_acceso_anidado_con_indice.cps"
+cat <<'EOF' > "$TARGET_DIR/class_test_v01.cps"
 class Box {
   var data: integer[];
-  function __ctor(n: integer): void {
+  function constructor(n: integer): void {
     this.data = [0,0,0,0];
   }
   function put(i: integer, v: integer): void {
@@ -131,6 +131,127 @@ let b: Box = new Box(4);
 b.put(2, 99);
 let q: integer = b.get(2);
 EOF
+
+cat <<'EOF' > "$TARGET_DIR/class_test_v02.cps"
+function main(): void {
+  let x: integer[] = [1,2];
+  x[0] = 9;
+}
+EOF
+
+cat <<'EOF' > "$TARGET_DIR/class_test_v03.cps"
+function main(): void {
+  let a: integer[] = [1,2];
+  a[true] = 1; // ERROR esperado: índice no entero
+}
+EOF
+
+
+
+cat <<'EOF' > "$TARGET_DIR/class_test_v04.cps"
+function main(): void {
+  let a: integer[] = [1,2];
+  a[0] = "hi"; // ERROR esperado: asignación incompatible (string -> integer)
+}
+EOF
+
+cat <<'EOF' > "$TARGET_DIR/class_test_v05.cps"
+class C {
+  var x: integer;
+  function constructor(): void { this.x = 0; }
+}
+
+function main(): void {
+  let c: C = new C();
+  c.x[0] = 1; // ERROR esperado: asig. indexada sobre no-arreglo
+}
+EOF
+
+cat <<'EOF' > "$TARGET_DIR/class_test_v06.cps"
+function main(): void {
+  let y: integer = 0;
+  y.data[0] = 1; // ERROR esperado: asig. indexada a propiedad en no-objeto
+}
+EOF
+
+
+cat <<'EOF' > "$TARGET_DIR/class_test_v07.cps"
+function main(): void {
+  const a: integer[] = [1];
+  a[0] = 2; // ERROR esperado: no se puede modificar constante
+}
+EOF
+
+
+cat <<'EOF' > "$TARGET_DIR/class_test_v08.cps"
+class D { 
+  var data: integer[];
+  function constructor(): void { this.data = [0]; }
+}
+
+function f(): void {
+  return;
+  this.data[0] = 1; // ERROR esperado: código inalcanzable / no emitir TAC
+}
+EOF
+
+cat <<'EOF' > "$TARGET_DIR/class_test_v09.cps"
+class B { var c: integer[]; function constructor(){ this.c = [0,1,2]; } }
+class A { var b: B;         function constructor(){ this.b = new B(); } }
+
+function main(): void {
+  let a: A = new A();
+  a.b.c[1] = 3; // Esperado: va por camino general. (pendiente cadenas largas)
+}
+EOF
+
+cat <<'EOF' > "$TARGET_DIR/class_test_v10.cps"
+class Box {
+  var data: integer[];
+  function constructor(): void { this.data = [7,8,9]; }
+  function get(i: integer): integer { return this.data[i]; }
+}
+
+function main(): void {
+  let b: Box = new Box();
+  let z: integer = b.get(1); // Debe generar FIELD_LOAD de this.data y luego INDEX_LOAD en tu backend (al menos FIELD_LOAD con _field_owner/_field_offset)
+}
+EOF
+
+cat <<'EOF' > "$TARGET_DIR/class_test_v11.cps"
+class AttrDup {
+  var a: integer;
+  var b: integer[];
+  const K: integer = 1;
+
+  function constructor(): void {
+    this.a = 0;
+    this.b = [0,0];
+  }
+}
+
+function main(): void {
+  let x: AttrDup = new AttrDup();
+  x.b[1] = 5;
+}
+EOF
+
+
+cat <<'EOF' > "$TARGET_DIR/class_test_v12.cps"
+class Box {
+  var data: integer[];
+  function constructor(){ this.data = [0,0,0,0]; }
+  function put(i: integer, v: integer): void {
+    this.data[i] = v; // Debe emitir FIELD_LOAD -> t_arr, INDEX_STORE t_arr[i]=v, y liberar t_arr (o al final por reset)
+  }
+}
+
+function main(): void {
+  let b: Box = new Box();
+  b.put(2, 99);
+}
+EOF
+
 
 cat <<'EOF' > "$TARGET_DIR/return_void_y_barrera.cps"
 function logTwice(x: integer): void {
@@ -404,7 +525,10 @@ for f in expresiones_puras.cps const_inicializada.cps acceso_propiedad_lectura_y
           indice_lectura_y_escritura.cps if_else_corto_circuito.cps while_con_actualizacion.cps \
           do_while_simple.cps for_azucar_while.cps switch_con_fallthrough_y_break.cps \
           funcion_con_parametros_y_return.cps recursion_factorial.cps clase_constructor_y_metodo.cps \
-          this_y_acceso_anidado_con_indice.cps return_void_y_barrera.cps for_sin_condicion_explicita.cps; do
+          class_test_v01.cps class_test_v02.cps class_test_v03.cps class_test_v04.cps \
+          class_test_v05.cps class_test_v06.cps class_test_v07.cps class_test_v08.cps \
+          class_test_v09.cps class_test_v10.cps class_test_v11.cps class_test_v12.cps \
+          return_void_y_barrera.cps for_sin_condicion_explicita.cps; do
   echo -e "\t- ${GREEN}$f${RESET}"
 done
 
