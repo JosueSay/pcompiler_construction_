@@ -48,12 +48,15 @@ count=$(( $(ls -1 "$TARGET_DIR" | wc -l) - 2 ))
 
 echo -e "${GREEN}✅ Todos los archivos .cps han sido creados en${RESET} ${CYAN}$TARGET_DIR${RESET} (${MAGENTA}$count archivos${RESET})"
 
-for f in error_index_no_entero.cps error_literal_heterogeneo.cps \
-          success_index_entero.cps success_literal_homogeneo.cps; do
+for f in error_ident_no_declarado.cps success_literales_basicos.cps; do
     if [[ $f == error_* ]]; then
-        echo -e "\t${YELLOW}- $f${RESET}"
+        COLOR=$YELLOW
+    elif [[ $f == success_* ]]; then
+        COLOR=$GREEN
     else
-        echo -e "\t${GREEN}- $f${RESET}"
+        COLOR=$GREEN
     fi
+    echo -e "\t- ${COLOR}$f${RESET}"
 done
+
 
