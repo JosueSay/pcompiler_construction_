@@ -153,8 +153,13 @@ class Emitter:
         if lines and lines[-1] != "":
             lines.append("")
         for q in self.quads:
-            lines.append(q.toText())
+            if q.op == Op.LABEL:  # etiquetas sin sangría
+                lines.append(q.toText())
+            else:  # resto con tab
+                lines.append("\t" + q.toText())
         return "\n".join(lines) + "\n"
+
+
 
     def writeTacText(self, out_dir: str, stem: str, *, simple_names: bool = False) -> str:
         """
