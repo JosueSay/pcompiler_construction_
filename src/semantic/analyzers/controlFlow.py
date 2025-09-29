@@ -260,16 +260,42 @@ class ControlFlowAnalyzer:
         log_semantic(f"[controlFlow] visitCond sobre {expr_ctx} -> ltrue={ltrue}, lfalse={lfalse}")
         ctx_type = type(expr_ctx).__name__
 
-        # !B
+        # --- Manejo robusto de '!' ---
         if ctx_type in ("UnaryExprContext", "UnaryExpressionContext"):
             op = getattr(expr_ctx, "op", None)
             if op and maybe_call(op).text == "!":
                 inner = safe_attr(expr_ctx, "unaryExpr") or safe_attr(expr_ctx, "expression") or safe_attr(expr_ctx, "right")
-                log_semantic("[controlFlow] visitCond: operador '!' detectado, intercambiando etiquetas")
+                log_semantic("[controlFlow] visitCond: operador '!' detectado (op presente)")
+                self.visitCond(inner, lfalse, ltrue)
+                return
+            # Caso extra: chequear hijos directos (ANTLR: '!' <expr>)
+            try:
+                if expr_ctx.getChildCount() >= 2 and expr_ctx.getChild(0).getText() == "!":
+                    inner = expr_ctx.getChild(1)
+                    log_semantic("[controlFlow] visitCond: operador '!' detectado (hijo directo)")
+                    self.visitCond(inner, lfalse, ltrue)
+                    return
+            except Exception:
+                pass
+
+        # Fallback textual (cuando llega algo raro con texto "!...")
+        try:
+            cond_txt = expr_ctx.getText()
+        except Exception:
+            cond_txt = ""
+        if cond_txt.startswith("!"):
+            inner = safe_attr(expr_ctx, "unaryExpr") or safe_attr(expr_ctx, "expression")
+            if inner is None:
+                try:
+                    inner = expr_ctx.getChild(1)  # después de '!' normalmente viene el inner
+                except Exception:
+                    inner = None
+            if inner is not None:
+                log_semantic("[controlFlow] visitCond: fallback textual '!' → intercambio de etiquetas")
                 self.visitCond(inner, lfalse, ltrue)
                 return
 
-        # B1 || B2
+        # --- B1 || B2 ---
         if "LogicalOr" in ctx_type or getattr(expr_ctx, "op", None) and maybe_call(expr_ctx.op).text == "||":
             left = safe_attr(expr_ctx, "left") or safe_attr(expr_ctx, "expression") or safe_attr(expr_ctx, "lhs")
             right = safe_attr(expr_ctx, "right") or safe_attr(expr_ctx, "expression1") or safe_attr(expr_ctx, "rhs")
@@ -280,7 +306,7 @@ class ControlFlowAnalyzer:
             self.visitCond(right, ltrue, lfalse)
             return
 
-        # B1 && B2
+        # --- B1 && B2 ---
         if "LogicalAnd" in ctx_type or getattr(expr_ctx, "op", None) and maybe_call(expr_ctx.op).text == "&&":
             left = safe_attr(expr_ctx, "left") or safe_attr(expr_ctx, "expression") or safe_attr(expr_ctx, "lhs")
             right = safe_attr(expr_ctx, "right") or safe_attr(expr_ctx, "expression1") or safe_attr(expr_ctx, "rhs")
@@ -291,11 +317,12 @@ class ControlFlowAnalyzer:
             self.visitCond(right, ltrue, lfalse)
             return
 
-        # Relacionales/igualdad: emitir sobre el texto
+        # --- Relacionales/igualdad: emitir directo ---
         cond_text = expr_ctx.getText()
         log_semantic(f"[controlFlow] visitCond: expresión final -> emitIfGoto {cond_text} ? {ltrue} : {lfalse}")
         self.v.emitter.emitIfGoto(cond_text, ltrue)
         self.v.emitter.emitGoto(lfalse)
+
 
     # ---------- IF ----------
     @log_function
@@ -501,10 +528,26 @@ class ControlFlowAnalyzer:
 
         try:
             init = safe_attr(ctx, "forInit") or safe_attr(ctx, "init") or safe_attr(ctx, "initializer")
+            if init is None:
+                try:
+                    vdecl = getattr(ctx, "variableDeclaration", None)
+                    if callable(vdecl):
+                        init = vdecl()
+                except Exception:
+                    pass
+            if init is None:
+                try:
+                    assign = getattr(ctx, "assignment", None)
+                    if callable(assign):
+                        init = assign()
+                except Exception:
+                    pass
+
             cond = safe_attr(ctx, "forCondition") or safe_attr(ctx, "cond") or safe_attr(ctx, "condition")
             step = safe_attr(ctx, "forStep") or safe_attr(ctx, "step") or safe_attr(ctx, "increment")
             body = safe_attr(ctx, "statement") or safe_attr(ctx, "body") or safe_attr(ctx, "block")
 
+            # Detectar expresiones del header
             exprs = []
             get_exprs = getattr(ctx, "expression", None)
             if callable(get_exprs):
@@ -541,10 +584,10 @@ class ControlFlowAnalyzer:
             step_txt = step.getText() if step is not None else "<none>"
             log_semantic(f"[for] header detectado: cond={cond_txt} | step={step_txt}")
 
-            # TAC
             if init is not None:
-                self.v.visit(init)
+                self.v.visit(init)  # soporta tanto decl como asignación en el header
 
+            # TAC
             lstart = self.v.emitter.newLabel("Lstart")
             lbody = self.v.emitter.newLabel("Lbody")
             lend = self.v.emitter.newLabel("Lend")
