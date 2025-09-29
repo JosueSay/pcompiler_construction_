@@ -1,15 +1,17 @@
 from typing import Any
 from antlr_gen.CompiscriptParser import CompiscriptParser
-from semantic.custom_types import BoolType, ErrorType, ClassType, ArrayType
+from semantic.custom_types import BoolType, ErrorType, ClassType
 from semantic.errors import SemanticError
-from logs.logger_semantic import log_semantic
+from logs.logger_semantic import log_semantic, log_function
 
 
 # -------------------------
 # Utilidades generales
 # -------------------------
 
+@log_function
 def as_list(x):
+    log_semantic(f"[util] as_list({x})")
     if x is None:
         return []
     try:
@@ -18,47 +20,49 @@ def as_list(x):
         return [x]
 
 
+@log_function
 def maybe_call(x: Any) -> Any:
-    """Devuelve x() si es callable; si no, x."""
+    log_semantic(f"[util] maybe_call({x})")
     return x() if callable(x) else x
 
 
+@log_function
 def safe_attr(ctx: Any, name: str) -> Any:
-    """getattr seguro (evalúa si es callable)."""
     val = getattr(ctx, name, None)
-    return maybe_call(val)
+    res = maybe_call(val)
+    log_semantic(f"[util] safe_attr({name}) -> {res}")
+    return res
 
 
+@log_function
 def first_expression(ctx) -> Any | None:
-    """
-    Devuelve la primera ExpressionContext visible bajo ctx.
-    Primero intenta ctx.expression(); si no, recorre descendientes.
-    """
     e = safe_attr(ctx, "expression")
     if e is not None:
+        log_semantic(f"[util] first_expression -> {e}")
         return e
     try:
         for i in range(ctx.getChildCount()):
             ch = ctx.getChild(i)
             if isinstance(ch, CompiscriptParser.ExpressionContext):
+                log_semantic(f"[util] first_expression -> {ch}")
                 return ch
             try:
                 for j in range(ch.getChildCount()):
                     gd = ch.getChild(j)
                     if isinstance(gd, CompiscriptParser.ExpressionContext):
+                        log_semantic(f"[util] first_expression -> {gd}")
                         return gd
             except Exception:
                 continue
     except Exception:
-        return None
+        pass
+    log_semantic("[util] first_expression -> None")
     return None
 
 
+@log_function
 def split_assignment_text(text: str) -> tuple[str | None, str | None]:
-    """
-    Separa 'LHS = RHS' evitando confundir '==', '!=', '<=', '>='.
-    Retorna (lhs, rhs) o (None, None) si no detecta asignación simple.
-    """
+    log_semantic(f"[util] split_assignment_text('{text}')")
     if not text:
         return None, None
     for i, ch in enumerate(text):
@@ -70,23 +74,21 @@ def split_assignment_text(text: str) -> tuple[str | None, str | None]:
             continue
         lhs = text[:i].strip()
         rhs = text[i + 1:].strip()
+        log_semantic(f"[util] split_assignment_text -> lhs='{lhs}', rhs='{rhs}'")
         return (lhs or None, rhs or None)
     return None, None
 
 
+@log_function
 def is_assign_text(text: str) -> bool:
-    """True si contiene una '=' simple que no es parte de comparaciones."""
-    if not text or '=' not in text:
-        return False
-    return ('==' not in text) and ('!=' not in text) and ('<=' not in text) and ('>=' not in text)
+    res = text and '=' in text and ('==' not in text) and ('!=' not in text) and ('<=' not in text) and ('>=' not in text)
+    log_semantic(f"[util] is_assign_text('{text}') -> {res}")
+    return bool(res)
 
 
+@log_function
 def collect_stmt_or_block(ctx) -> list[Any]:
-    """
-    Devuelve los hijos que sean StatementContext o BlockContext.
-    1) ctx.statement() si existe
-    2) Recorrido por hijos (StatementContext / BlockContext)
-    """
+    log_semantic(f"[util] collect_stmt_or_block({ctx.getText()[:30]}...)")
     stmts = as_list(safe_attr(ctx, "statement"))
     if stmts:
         return stmts
@@ -104,55 +106,52 @@ def collect_stmt_or_block(ctx) -> list[Any]:
                 out.append(ch)
     except Exception:
         pass
+    log_semantic(f"[util] collect_stmt_or_block -> {len(out)} elementos encontrados")
     return out
 
 
+@log_function
 def first_switch_discriminant(ctx) -> Any | None:
-    """
-    Obtiene la expresión del 'switch(<expr>)' evitando recoger expresiones de 'case'.
-    Preferencia:
-      1) primer elemento de ctx.expression() si es iterable
-      2) ctx.expression() si es único
-      3) fallback: first_expression(ctx)
-    """
     e = safe_attr(ctx, "expression")
     if e is None:
-        return first_expression(ctx)
+        res = first_expression(ctx)
+        log_semantic(f"[util] first_switch_discriminant -> {res}")
+        return res
     try:
         seq = list(e)
         if seq:
+            log_semantic(f"[util] first_switch_discriminant -> {seq[0]}")
             return seq[0]
     except TypeError:
-        return e
-    return first_expression(ctx)
+        pass
+    res = first_expression(ctx)
+    log_semantic(f"[util] first_switch_discriminant -> {res}")
+    return res
 
 
+@log_function
 def has_default_clause(ctx) -> bool:
-    """
-    True si hay 'default' (DefaultClauseContext o token 'default') en el subárbol.
-    """
     DefaultCtx = getattr(CompiscriptParser, "DefaultClauseContext", None)
     try:
         for i in range(ctx.getChildCount()):
             ch = ctx.getChild(i)
             if DefaultCtx is not None and isinstance(ch, DefaultCtx):
+                log_semantic(f"[util] has_default_clause -> True")
                 return True
             if type(ch).__name__.lower().startswith("default") and type(ch).__name__.endswith("Context"):
+                log_semantic(f"[util] has_default_clause -> True")
                 return True
     except Exception:
         pass
     try:
         txt = ctx.getText()
         if "default" in txt:
+            log_semantic(f"[util] has_default_clause -> True")
             return True
     except Exception:
         pass
+    log_semantic(f"[util] has_default_clause -> False")
     return False
-
-
-# -------------------------
-# Analyzer
-# -------------------------
 
 class ControlFlowAnalyzer:
     """
@@ -171,49 +170,59 @@ class ControlFlowAnalyzer:
     """
 
     def __init__(self, v):
+        log_semantic("===== [controlFlow.py] Inicio =====")
         self.v = v
         # Para TAC
         self.loop_ctx_stack: list[dict[str, str]] = []
         self.switch_ctx_stack: list[dict[str, str]] = []
 
     # ---------- helpers semánticos ----------
-
-    def _typeOfSilent(self, expr_ctx):
-        """
-        Obtiene el tipo estático de una expresión SIN emitir TAC.
-        Se apoya en la barrera de emisión del Emitter y resetea temporales de la sentencia.
-        """
+    @log_function
+    def typeOfSilent(self, expr_ctx):
+        log_semantic(f"[controlFlow] typeOfSilent sobre: {expr_ctx}")
         if expr_ctx is None:
+            log_semantic("[controlFlow] typeOfSilent -> ErrorType() por None")
             return ErrorType()
         old_barrier = self.v.emitter.flow_terminated
         self.v.emitter.flow_terminated = True
         try:
             t = self.v.visit(expr_ctx)
+            log_semantic(f"[controlFlow] typeOfSilent -> {t}")
         finally:
             # restaurar y limpiar temporales de la sentencia de tipado
             self.v.emitter.flow_terminated = old_barrier
             self.v.emitter.temp_pool.resetPerStatement()
         return t
 
+    @log_function
     def requireBoolean(self, cond_t, ctx, who: str):
+        log_semantic(f"[controlFlow] requireBoolean para {who}, tipo detectado: {cond_t}")
         if isinstance(cond_t, ErrorType):
             return
         if not isinstance(cond_t, BoolType):
             self.v.appendErr(SemanticError(
                 f"La condición de {who} debe ser boolean, no {cond_t}.",
                 line=ctx.start.line, column=ctx.start.column))
+            log_semantic(f"[controlFlow] requireBoolean -> ErrorType detectado")
 
+    @log_function
     def sameType(self, a, b):
+        log_semantic(f"[controlFlow] sameType comparando {a} y {b}")
         if isinstance(a, ErrorType) or isinstance(b, ErrorType):
             return True
         if type(a) is type(b):
             if isinstance(a, ClassType):
-                return a.name == b.name
+                res = a.name == b.name
+                log_semantic(f"[controlFlow] sameType clase -> {res}")
+                return res
             if hasattr(a, "elem_type") and hasattr(b, "elem_type"):
-                return self.sameType(a.elem_type, b.elem_type)
+                res = self.sameType(a.elem_type, b.elem_type)
+                log_semantic(f"[controlFlow] sameType elem_type -> {res}")
+                return res
             return True
         return False
 
+    @log_function
     def walk(self, node):
         try:
             for ch in node.getChildren():
@@ -222,7 +231,9 @@ class ControlFlowAnalyzer:
         except Exception:
             return
 
+    @log_function
     def collectCaseExprs(self, ctx):
+        log_semantic(f"[controlFlow] collectCaseExprs para {ctx}")
         exprs = []
         cb = getattr(ctx, "caseBlock", None)
         if callable(cb):
@@ -241,10 +252,12 @@ class ControlFlowAnalyzer:
                     get_exprs = getattr(n, "expression", None)
                     if callable(get_exprs):
                         exprs.extend(as_list(get_exprs()))
+        log_semantic(f"[controlFlow] collectCaseExprs -> {len(exprs)} expresiones encontradas")
         return exprs
-
-    # ---------- corto-circuito (TAC) ----------
+    
+    @log_function
     def visitCond(self, expr_ctx, ltrue: str, lfalse: str) -> None:
+        log_semantic(f"[controlFlow] visitCond sobre {expr_ctx} -> ltrue={ltrue}, lfalse={lfalse}")
         ctx_type = type(expr_ctx).__name__
 
         # !B
@@ -252,6 +265,7 @@ class ControlFlowAnalyzer:
             op = getattr(expr_ctx, "op", None)
             if op and maybe_call(op).text == "!":
                 inner = safe_attr(expr_ctx, "unaryExpr") or safe_attr(expr_ctx, "expression") or safe_attr(expr_ctx, "right")
+                log_semantic("[controlFlow] visitCond: operador '!' detectado, intercambiando etiquetas")
                 self.visitCond(inner, lfalse, ltrue)
                 return
 
@@ -260,6 +274,7 @@ class ControlFlowAnalyzer:
             left = safe_attr(expr_ctx, "left") or safe_attr(expr_ctx, "expression") or safe_attr(expr_ctx, "lhs")
             right = safe_attr(expr_ctx, "right") or safe_attr(expr_ctx, "expression1") or safe_attr(expr_ctx, "rhs")
             lmid = self.v.emitter.newLabel("Lor")
+            log_semantic("[controlFlow] visitCond: operador '||' detectado, creando label intermedio " + lmid)
             self.visitCond(left, ltrue, lmid)
             self.v.emitter.emitLabel(lmid)
             self.visitCond(right, ltrue, lfalse)
@@ -270,6 +285,7 @@ class ControlFlowAnalyzer:
             left = safe_attr(expr_ctx, "left") or safe_attr(expr_ctx, "expression") or safe_attr(expr_ctx, "lhs")
             right = safe_attr(expr_ctx, "right") or safe_attr(expr_ctx, "expression1") or safe_attr(expr_ctx, "rhs")
             lmid = self.v.emitter.newLabel("Land")
+            log_semantic("[controlFlow] visitCond: operador '&&' detectado, creando label intermedio " + lmid)
             self.visitCond(left, lmid, lfalse)
             self.v.emitter.emitLabel(lmid)
             self.visitCond(right, ltrue, lfalse)
@@ -277,23 +293,25 @@ class ControlFlowAnalyzer:
 
         # Relacionales/igualdad: emitir sobre el texto
         cond_text = expr_ctx.getText()
+        log_semantic(f"[controlFlow] visitCond: expresión final -> emitIfGoto {cond_text} ? {ltrue} : {lfalse}")
         self.v.emitter.emitIfGoto(cond_text, ltrue)
         self.v.emitter.emitGoto(lfalse)
 
     # ---------- IF ----------
+    @log_function
     def visitIfStatement(self, ctx: CompiscriptParser.IfStatementContext):
+        log_semantic(f"[controlFlow] visitIfStatement: {ctx.getText()[:50]}...")
+
         # Semántica: tipo de condición (sin emitir)
         cond_ctx = first_expression(ctx)
         if cond_ctx is not None:
-            ct = self._typeOfSilent(cond_ctx)
+            ct = self.typeOfSilent(cond_ctx)
             self.requireBoolean(ct, ctx, "if")
-
-        # TAC
-        cond = cond_ctx
-        if cond is None:
+        else:
             log_semantic("[if] no se encontró expresión de condición; se omite emisión.")
             return {"terminated": False, "reason": None}
 
+        # TAC
         stmts = collect_stmt_or_block(ctx)
         then_stmt = stmts[0] if len(stmts) >= 1 else None
         else_stmt = stmts[1] if len(stmts) >= 2 else None
@@ -306,7 +324,8 @@ class ControlFlowAnalyzer:
         lend = self.v.emitter.newLabel("Lend")
         lelse = self.v.emitter.newLabel("Lelse") if else_stmt is not None else lend
 
-        self.visitCond(cond, lthen, lelse)
+        log_semantic(f"[if] etiquetas: then={lthen}, else={lelse}, end={lend}")
+        self.visitCond(cond_ctx, lthen, lelse)
 
         # then
         self.v.emitter.emitLabel(lthen)
@@ -314,47 +333,44 @@ class ControlFlowAnalyzer:
 
         # else (si existe)
         if else_stmt is not None:
-            # si el 'then' no terminó, emitimos el salto al 'end'
             self.v.emitter.emitGoto(lend)
-
-            # etiqueta de 'else' SIEMPRE se emite (LABEL atraviesa la barrera)
             self.v.emitter.emitLabel(lelse)
-
-            # CAMBIO: limpiar barrera SÓLO si el 'then' terminó (para poder emitir el 'else')
             if bool(then_result.get("terminated")):
                 self.v.emitter.clearFlowTermination()
-
             else_result = self.v.visit(else_stmt) or {"terminated": False, "reason": None}
         else:
             else_result = {"terminated": False, "reason": None}
 
-        # end
         self.v.emitter.emitLabel(lend)
-
-        # Terminación si ambas ramas terminan
         both_terminate = bool(then_result.get("terminated") and else_result.get("terminated"))
 
-        # CAMBIO: en 'end' limpiar barrera solo si NO terminan ambas ramas
         if not both_terminate:
             self.v.emitter.clearFlowTermination()
 
         if both_terminate:
             self.v.stmt_just_terminated = "if-else"
             self.v.stmt_just_terminator_node = ctx
+            log_semantic("[if] ambas ramas terminan -> marcado como 'terminated'")
             return {"terminated": True, "reason": "if-else"}
 
-        # limpiar flags si no aplica a todo el if
         self.v.stmt_just_terminated = None
         self.v.stmt_just_terminator_node = None
+        log_semantic("[if] rama 'if' parcial -> no termina completamente")
         return {"terminated": False, "reason": None}
 
-
     # ---------- WHILE ----------
+    @log_function
     def visitWhileStatement(self, ctx: CompiscriptParser.WhileStatementContext):
+        log_semantic(f"[while] visitWhileStatement: {ctx.getText()[:50]}...")
+
         # Semántica (tipo de condición)
         cctx = safe_attr(ctx, "expression") or safe_attr(ctx, "cond") or safe_attr(ctx, "condition")
         if cctx is not None:
-            self.requireBoolean(self._typeOfSilent(cctx), ctx, "while")
+            cond_type = self.typeOfSilent(cctx)
+            log_semantic(f"[while] tipo de condición: {cond_type}")
+            self.requireBoolean(cond_type, ctx, "while")
+        else:
+            log_semantic("[while] no se encontró expresión de condición.")
 
         # TAC
         cond = cctx
@@ -363,10 +379,12 @@ class ControlFlowAnalyzer:
         lstart = self.v.emitter.newLabel("Lstart")
         lbody = self.v.emitter.newLabel("Lbody")
         lend = self.v.emitter.newLabel("Lend")
+        log_semantic(f"[while] etiquetas: start={lstart}, body={lbody}, end={lend}")
 
         # contexto de bucle
         self.loop_ctx_stack.append({"break": lend, "continue": lstart})
         self.v.loop_depth += 1
+        log_semantic(f"[while] loop depth={self.v.loop_depth}, contexto stack actualizado")
 
         self.v.emitter.emitLabel(lstart)
         self.visitCond(cond, lbody, lend)
@@ -379,24 +397,34 @@ class ControlFlowAnalyzer:
         self.v.emitter.clearFlowTermination()
         self.loop_ctx_stack.pop()
         self.v.loop_depth -= 1
+        log_semantic(f"[while] bucle terminado, loop depth={self.v.loop_depth}")
 
         return {"terminated": False, "reason": None}
 
     # ---------- DO-WHILE ----------
+    @log_function
     def visitDoWhileStatement(self, ctx: CompiscriptParser.DoWhileStatementContext):
+        log_semantic(f"[do-while] visitDoWhileStatement: {ctx.getText()[:50]}...")
+
         body = safe_attr(ctx, "statement") or safe_attr(ctx, "body") or safe_attr(ctx, "block")
         cond = safe_attr(ctx, "expression") or safe_attr(ctx, "cond") or safe_attr(ctx, "condition")
 
         # Semántica (tipo de condición)
         if cond is not None:
-            self.requireBoolean(self._typeOfSilent(cond), ctx, "do-while")
+            cond_type = self.typeOfSilent(cond)
+            log_semantic(f"[do-while] tipo de condición: {cond_type}")
+            self.requireBoolean(cond_type, ctx, "do-while")
+        else:
+            log_semantic("[do-while] no se encontró expresión de condición.")
 
         lbody = self.v.emitter.newLabel("Lbody")
         lcond = self.v.emitter.newLabel("Lcond")
         lend = self.v.emitter.newLabel("Lend")
+        log_semantic(f"[do-while] etiquetas: body={lbody}, cond={lcond}, end={lend}")
 
         self.loop_ctx_stack.append({"break": lend, "continue": lcond})
         self.v.loop_depth += 1
+        log_semantic(f"[do-while] loop depth={self.v.loop_depth}, contexto stack actualizado")
 
         self.v.emitter.emitLabel(lbody)
         self.v.visit(body)
@@ -407,31 +435,27 @@ class ControlFlowAnalyzer:
         self.v.emitter.clearFlowTermination()
         self.loop_ctx_stack.pop()
         self.v.loop_depth -= 1
+        log_semantic(f"[do-while] bucle terminado, loop depth={self.v.loop_depth}")
 
         return {"terminated": False, "reason": None}
 
     # ---------- FOR ----------
+    @log_function
     def emitForStep(self, step_ctx):
-        """
-        Emite el 'step' del for:
-         - Si es asignación:  LHS = <place(RHS)>
-         - Si no lo es:       visita por efectos colaterales.
-        """
+        log_semantic(f"[for.step] visit emitForStep: {getattr(step_ctx, 'getText', lambda: '<None>')()}")
         try:
             if step_ctx is None:
+                log_semantic("[for.step] step_ctx es None, nada que emitir.")
                 return
 
             txt = step_ctx.getText()
             if not is_assign_text(txt):
                 self.v.visit(step_ctx)
-                log_semantic("[for.step] (no-assign) visit(expr)")
+                log_semantic("[for.step] (no-assign) visit(expr) ejecutado")
                 return
 
             lhs_node = getattr(step_ctx, "left", None) or getattr(step_ctx, "lhs", None)
-            if lhs_node is not None:
-                lhs_place = lhs_node.getText().strip()
-            else:
-                lhs_place, _rhs_text = split_assignment_text(txt)
+            lhs_place = lhs_node.getText().strip() if lhs_node is not None else split_assignment_text(txt)[0]
 
             rhs_node = getattr(step_ctx, "right", None)
             if rhs_node is None:
@@ -442,34 +466,25 @@ class ControlFlowAnalyzer:
                         rhs_node = exprs[-1]
 
             if rhs_node is None:
-                try:
-                    for n in self.walk(step_ctx):
-                        if isinstance(n, CompiscriptParser.ExpressionContext):
-                            t = n.getText()
-                            if t and '=' not in t:
-                                rhs_node = n
-                except Exception:
-                    rhs_node = None
+                for n in self.walk(step_ctx):
+                    if isinstance(n, CompiscriptParser.ExpressionContext):
+                        t = n.getText()
+                        if t and '=' not in t:
+                            rhs_node = n
+                            break
 
             if rhs_node is None:
                 _lhs_txt, rhs_text = split_assignment_text(txt)
                 if lhs_place is None or rhs_text is None:
                     self.v.visit(step_ctx)
-                    log_semantic("[for.step] fallback visit(expr) (no structured RHS)")
+                    log_semantic("[for.step] fallback visit(expr) (no RHS detectado)")
                     return
                 self.v.emitter.emitAssign(lhs_place, rhs_text)
-                log_semantic(f"[for.step] fallback textual emit: {lhs_place} = {rhs_text}")
+                log_semantic(f"[for.step] fallback emit: {lhs_place} = {rhs_text}")
                 return
 
             self.v.visit(rhs_node)
             rhs_place = getattr(rhs_node, "_place", rhs_node.getText().strip())
-
-            if lhs_place is None:
-                lhs_place, _ = split_assignment_text(txt)
-            if lhs_place is None:
-                log_semantic("[for.step] WARNING: LHS no detectable; solo se materializó RHS.")
-                return
-
             self.v.emitter.emitAssign(lhs_place, rhs_place)
             log_semantic(f"[for.step] emit: {lhs_place} = {rhs_place}")
 
@@ -480,12 +495,10 @@ class ControlFlowAnalyzer:
             except Exception:
                 pass
 
+    @log_function
     def visitForStatement(self, ctx: CompiscriptParser.ForStatementContext):
-        """
-        for (init; cond; step) S
-        - Si 'cond' falta o parece asignación → true.
-        - 'continue' → Lstep (o Lstart si no hay step).
-        """
+        log_semantic(f"[for] visitForStatement: {ctx.getText()[:50]}...")
+
         try:
             init = safe_attr(ctx, "forInit") or safe_attr(ctx, "init") or safe_attr(ctx, "initializer")
             cond = safe_attr(ctx, "forCondition") or safe_attr(ctx, "cond") or safe_attr(ctx, "condition")
@@ -518,9 +531,11 @@ class ControlFlowAnalyzer:
                 if not replaced:
                     cond = None
 
-            # Semántica: tipo de condición si existe
+            # Semántica
             if cond is not None:
-                self.requireBoolean(self._typeOfSilent(cond), ctx, "for")
+                cond_type = self.typeOfSilent(cond)
+                log_semantic(f"[for] tipo de condición: {cond_type}")
+                self.requireBoolean(cond_type, ctx, "for")
 
             cond_txt = cond.getText() if cond is not None else "<true>"
             step_txt = step.getText() if step is not None else "<none>"
@@ -534,9 +549,11 @@ class ControlFlowAnalyzer:
             lbody = self.v.emitter.newLabel("Lbody")
             lend = self.v.emitter.newLabel("Lend")
             lstep = self.v.emitter.newLabel("Lstep") if step is not None else lstart
+            log_semantic(f"[for] etiquetas: start={lstart}, body={lbody}, step={lstep}, end={lend}")
 
             self.loop_ctx_stack.append({"break": lend, "continue": lstep})
             self.v.loop_depth += 1
+            log_semantic(f"[for] loop depth={self.v.loop_depth}, contexto stack actualizado")
 
             self.v.emitter.emitLabel(lstart)
             if cond is None:
@@ -557,6 +574,7 @@ class ControlFlowAnalyzer:
             self.v.emitter.clearFlowTermination()
             self.loop_ctx_stack.pop()
             self.v.loop_depth -= 1
+            log_semantic(f"[for] bucle terminado, loop depth={self.v.loop_depth}")
 
             return {"terminated": False, "reason": None}
 
@@ -571,16 +589,22 @@ class ControlFlowAnalyzer:
             return {"terminated": False, "reason": "error"}
 
     # ---------- SWITCH ----------
+    @log_function
     def visitSwitchStatement(self, ctx):
-        # Semántica: validar tipos de 'case' contra el discriminante.
+        log_semantic("[switch] visitSwitchStatement iniciado")
+
+        # Semántica: validar tipos de 'case' contra el discriminante
         discr = first_switch_discriminant(ctx)
         if discr is None:
             log_semantic("[switch] no se encontró expresión discriminante; se omite emisión.")
             return {"terminated": False, "reason": None}
 
-        scrutinee_t = self._typeOfSilent(discr)
+        scrutinee_t = self.typeOfSilent(discr)
+        log_semantic(f"[switch] tipo discriminante: {scrutinee_t}")
+
         for e in self.collectCaseExprs(ctx):
-            et = self._typeOfSilent(e)
+            et = self.typeOfSilent(e)
+            log_semantic(f"[switch] tipo case detectado: {et}")
             if not isinstance(scrutinee_t, ErrorType) and not isinstance(et, ErrorType):
                 if not self.sameType(scrutinee_t, et):
                     self.v.appendErr(SemanticError(
@@ -588,8 +612,8 @@ class ControlFlowAnalyzer:
                         line=e.start.line, column=e.start.column))
 
         # TAC: armado de casos / default
-        expr = discr
-        discr_text = expr.getText()
+        discr_text = discr.getText()
+        log_semantic(f"[switch] discriminante texto: {discr_text}")
 
         case_block = safe_attr(ctx, "caseBlock") or safe_attr(ctx, "cases") or safe_attr(ctx, "switchBlock")
         cases: list[tuple[Any, list[Any]]] = []
@@ -604,11 +628,13 @@ class ControlFlowAnalyzer:
                     ce = safe_attr(cc, "expression") or safe_attr(cc, "caseExpr") or safe_attr(cc, "constExpr")
                     sts = as_list(safe_attr(cc, "statement")) or as_list(safe_attr(cc, "statements"))
                     cases.append((ce, sts))
+                    log_semantic(f"[switch] caso agregado: {ce.getText()} con {len(sts)} statements")
 
             dcl = safe_attr(case_block, "defaultClause")
             if dcl is not None:
                 recogio_estructurado = True
                 default_stmts = as_list(safe_attr(dcl, "statement")) or as_list(safe_attr(dcl, "statements"))
+                log_semantic(f"[switch] default agregado con {len(default_stmts)} statements")
 
         if not recogio_estructurado:
             case_exprs = self.collectCaseExprs(ctx)
@@ -617,36 +643,47 @@ class ControlFlowAnalyzer:
                 return {"terminated": False, "reason": None}
             cases = [(e, []) for e in case_exprs]
             default_stmts = [] if has_default_clause(ctx) else None
+            log_semantic(f"[switch] casos detectados dinámicamente: {len(cases)}, default={default_stmts is not None}")
 
         lend = self.v.emitter.newLabel("Lend")
         ldef = self.v.emitter.newLabel("Ldef") if default_stmts is not None else lend
         lcases = [self.v.emitter.newLabel("Lcase") for _ in cases]
 
+        log_semantic(f"[switch] etiquetas generadas: lend={lend}, ldef={ldef}, lcases={[l.getName() for l in lcases]}")
+
         for (cexpr, _), lcase in zip(cases, lcases):
             cond_text = f"{discr_text} == {cexpr.getText()}"
             self.v.emitter.emitIfGoto(cond_text, lcase)
+            log_semantic(f"[switch] emitIfGoto: {cond_text} -> {lcase.getName()}")
         self.v.emitter.emitGoto(ldef)
+        log_semantic(f"[switch] emitGoto default/end: {ldef.getName()}")
 
-        self.switch_ctx_stack.append({"break": lend, "continue": lend})  # continue no aplica en switch
+        self.switch_ctx_stack.append({"break": lend, "continue": lend})
+        log_semantic(f"[switch] contexto stack actualizado: break={lend}, continue={lend}")
 
         for (_, st_list), lcase in zip(cases, lcases):
             self.v.emitter.emitLabel(lcase)
+            log_semantic(f"[switch] etiqueta caso emitida: {lcase.getName()}")
             for st in st_list:
                 self.v.visit(st)
 
         if default_stmts is not None:
             self.v.emitter.emitLabel(ldef)
+            log_semantic(f"[switch] etiqueta default emitida: {ldef.getName()}")
             for st in default_stmts:
                 self.v.visit(st)
 
         self.v.emitter.emitLabel(lend)
         self.v.emitter.clearFlowTermination()
         self.switch_ctx_stack.pop()
+        log_semantic("[switch] fin switch; etiquetas y contexto limpiados")
+
         return {"terminated": False, "reason": None}
 
-
     # ---------- break / continue ----------
+    @log_function
     def visitBreakStatement(self, ctx: CompiscriptParser.BreakStatementContext):
+        log_semantic("[break] visitBreakStatement iniciado")
         target = None
         if self.loop_ctx_stack:
             target = self.loop_ctx_stack[-1]["break"]
@@ -654,32 +691,38 @@ class ControlFlowAnalyzer:
             target = self.switch_ctx_stack[-1]["break"]
 
         if target is None:
-            # Error semántico (fuera de bucle/switch)
             self.v.appendErr(SemanticError(
                 "'break' fuera de un bucle o switch.",
                 line=ctx.start.line, column=ctx.start.column))
+            log_semantic("[break] ERROR: fuera de bucle o switch")
             return {"terminated": False, "reason": None}
 
         # TAC
         self.v.emitter.emitGoto(target)
         self.v.emitter.markFlowTerminated()
+        log_semantic(f"[break] emitGoto a {target.getName()} y flujo marcado como terminado")
+
         # Marca terminación del flujo del bloque actual
         self.v.stmt_just_terminated = "break"
         self.v.stmt_just_terminator_node = ctx
         return {"terminated": True, "reason": "break"}
 
+    @log_function
     def visitContinueStatement(self, ctx: CompiscriptParser.ContinueStatementContext):
+        log_semantic("[continue] visitContinueStatement iniciado")
         target = self.loop_ctx_stack[-1]["continue"] if self.loop_ctx_stack else None
         if target is None:
-            # Error semántico (fuera de bucle)
             self.v.appendErr(SemanticError(
                 "'continue' fuera de un bucle.",
                 line=ctx.start.line, column=ctx.start.column))
+            log_semantic("[continue] ERROR: fuera de bucle")
             return {"terminated": False, "reason": None}
 
         # TAC
         self.v.emitter.emitGoto(target)
         self.v.emitter.markFlowTerminated()
+        log_semantic(f"[continue] emitGoto a {target.getName()} y flujo marcado como terminado")
+
         # Marca terminación del flujo del bloque actual
         self.v.stmt_just_terminated = "continue"
         self.v.stmt_just_terminator_node = ctx

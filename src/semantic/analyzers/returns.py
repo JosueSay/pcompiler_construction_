@@ -7,7 +7,6 @@ class ReturnsAnalyzer:
     @log_function
     def __init__(self, v):
         log_semantic("===== [Returns.py] Inicio =====")
-        log_semantic(f"__init__ -> Recibido v={v}")
         self.v = v
 
     @log_function

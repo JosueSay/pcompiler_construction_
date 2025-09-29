@@ -2,13 +2,15 @@ from antlr_gen.CompiscriptParser import CompiscriptParser
 from semantic.custom_types import ClassType, VoidType, ErrorType
 from semantic.symbol_kinds import SymbolCategory
 from semantic.registry.type_resolver import resolve_typectx, validate_known_types
-from logs.logger_semantic import log_semantic
+from logs.logger_semantic import log_semantic, log_function
 from semantic.errors import SemanticError
 
 class ClassesAnalyzer:
     def __init__(self, v):
+        log_semantic("===== [Classes.py] Inicio =====")
         self.v = v
 
+    @log_function
     def visitClassDeclaration(self, ctx: CompiscriptParser.ClassDeclarationContext):
         name = ctx.Identifier(0).getText()
         base = ctx.Identifier(1).getText() if len(ctx.Identifier()) > 1 else None
@@ -31,25 +33,11 @@ class ClassesAnalyzer:
         log_semantic(f"[scope] clase '{name}' cerrada; frame_size={size} bytes")
         return None
 
+    @log_function
     def visitMethodDeclaration(self, ctx_fn: CompiscriptParser.FunctionDeclarationContext, *, current_class: str):
-        """
-        Declara y valida un **método** (incluido `constructor`) dentro de `current_class`.
-
-        Reglas clave:
-        - Agrega `this: ClassType(current_class)` como primer parámetro implícito.
-        - Valida tipos de parámetros y tipo de retorno (si se anota).
-        - **Override**: se compara firma contra la primera clase base que tenga un método con el mismo nombre,
-        **excepto** si el nombre es `constructor` (los constructores NO se overridean).
-        - Registro:
-            * Tabla de símbolos (como FUNCTION).
-            * MethodRegistry (para resolución/llamadas y validación de `new`/métodos).
-        - Ejecución del cuerpo:
-            * Empuja el tipo de retorno esperado a `fn_stack` (para validar `return`).
-            * **SAVE/RESTORE** de flags de terminación para que un `return` interno NO marque *dead code*
-            en el bloque/clase que contiene la declaración.
-        """
         method_name = ctx_fn.Identifier().getText()
         qname = f"{current_class}.{method_name}"
+        log_semantic(f"[method] inicio: {qname}")
 
         # 1) params explícitos + 'this'
         param_types = [ClassType(current_class)]
@@ -70,23 +58,23 @@ class ClassesAnalyzer:
                                         f"parámetro '{pname}' de método {qname}", self.v.errors)
                 param_names.append(pname)
                 param_types.append(ptype)
+                log_semantic(f"[param] detectado: {pname}: {ptype}")
 
-        # 2) return type (para constructor, lo tratamos como void si no se anota)
+        # 2) return type
         rtype = None
         if ctx_fn.type_():
             rtype = resolve_typectx(ctx_fn.type_())
             validate_known_types(rtype, self.v.known_classes, ctx_fn,
                                 f"retorno de método '{qname}'", self.v.errors)
         if method_name == "constructor" and rtype is None:
-            # Convención: el constructor no retorna valor (void)
             rtype = VoidType()
+        log_semantic(f"[method] return type: {rtype if rtype else 'void?'}")
 
-        # --- Utilidades de comparación de firma (para override de métodos NO constructor) ---
+        # --- Override check ---
         def normalize_ret(rt):
             return rt if rt is not None else VoidType()
 
         def signatures_equal(child_params, child_ret, base_params, base_ret):
-            # Compara desde índice 1 (ignora 'this' nominalmente distinto)
             if len(child_params) != len(base_params):
                 return False
             for a, b in zip(child_params[1:], base_params[1:]):
@@ -94,7 +82,6 @@ class ClassesAnalyzer:
                     return False
             return normalize_ret(child_ret) == normalize_ret(base_ret)
 
-        # 2.5) Validación de OVERRIDE (solo si NO es constructor)
         if method_name != "constructor":
             found_base = None
             base_sig = None
@@ -103,9 +90,8 @@ class ClassesAnalyzer:
                 mt = self.v.method_registry.lookup(bq)
                 if mt is not None:
                     found_base = base
-                    base_sig = mt  # (param_types, return_type)
+                    base_sig = mt
                     break
-
             if found_base is not None:
                 base_params, base_ret = base_sig
                 if not signatures_equal(param_types, rtype, base_params, base_ret):
@@ -113,6 +99,7 @@ class ClassesAnalyzer:
                         f"Override inválido de '{method_name}' en '{current_class}'; "
                         f"la firma no coincide con la de la clase base '{found_base}'.",
                         line=ctx_fn.start.line, column=ctx_fn.start.column))
+                    log_semantic(f"[override] firma inválida detectada en {qname}")
 
         # 3) Registrar símbolo + registry
         try:
@@ -126,13 +113,8 @@ class ClassesAnalyzer:
             )
             fsym.param_types = param_types
             fsym.return_type = rtype
-
-            # Etiqueta TAC para llamadas a método (f_<Class>_<method>)
             fsym.label = f"f_{current_class}_{method_name}"
-
-            # Registrar para resolución de métodos/constructor.
             self.v.method_registry.register(qname, param_types, rtype)
-
             log_semantic(f"[method] declarada: {qname}({', '.join(param_names)}) -> {rtype if rtype else 'void?'}")
         except Exception as e:
             self.v.appendErr(SemanticError(str(e), line=ctx_fn.start.line, column=ctx_fn.start.column))
@@ -154,7 +136,6 @@ class ClassesAnalyzer:
         expected_r = rtype if rtype is not None else VoidType()
         self.v.fn_stack.append(expected_r)
 
-        # --- SAVE/RESTORE para no propagar 'return' del método al bloque/clase exterior ---
         saved_term = self.v.stmt_just_terminated
         saved_node = getattr(self.v, "stmt_just_terminator_node", None)
         self.v.stmt_just_terminated = None
@@ -164,12 +145,9 @@ class ClassesAnalyzer:
         finally:
             self.v.stmt_just_terminated = saved_term
             self.v.stmt_just_terminator_node = saved_node
-        # -------------------------------------------------------------------------------
 
         self.v.fn_stack.pop()
-
         size = self.v.scopeManager.exitScope()
         self.v.in_method = False
         log_semantic(f"[scope] método '{qname}' cerrado; frame_size={size} bytes")
         return None
-

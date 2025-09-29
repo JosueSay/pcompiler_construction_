@@ -8,13 +8,15 @@ from semantic.type_system import (
     resultArithmetic, resultModulo, resultRelational, resultEquality,
     resultLogical, resultUnaryMinus, resultUnaryNot, isAssignable
 )
-from logs.logger_semantic import log_semantic
+from logs.logger_semantic import log_semantic, log_function
 from semantic.errors import SemanticError
 from ir.tac import Op
 
 
 class ExpressionsAnalyzer:
+    @log_function
     def __init__(self, v, lvalues):
+        log_semantic("===== [Expressions.py] Inicio =====")
         self.v = v
         self.lvalues = lvalues
 
@@ -29,10 +31,13 @@ class ExpressionsAnalyzer:
 
     def setPlace(self, node, place: str, is_temp: bool) -> None:
         try:
+            old_place = getattr(node, "_place", None)
+            old_temp = getattr(node, "_is_temp", None)
             setattr(node, "_place", place)
             setattr(node, "_is_temp", is_temp)
+            log_semantic(f"setPlace: Node={node}, old=({old_place},{old_temp}) new=({place},{is_temp})")
         except Exception:
-            pass
+            log_semantic(f"setPlace: Node={node} could not be updated")
 
     def getPlace(self, node) -> str | None:
         return getattr(node, "_place", None)
@@ -42,7 +47,9 @@ class ExpressionsAnalyzer:
 
     def newTempFor(self, t) -> str:
         kind = self.typeToTempKind(t)
-        return self.v.emitter.temp_pool.newTemp(kind)
+        temp = self.v.emitter.temp_pool.newTemp(kind)
+        log_semantic(f"newTempFor: Type={t} -> Temp={temp}")
+        return temp
 
     def freeIfTemp(self, node, t_hint=None) -> None:
         if not self.isTempNode(node):
@@ -51,6 +58,7 @@ class ExpressionsAnalyzer:
         if place is None:
             return
         kind = self.typeToTempKind(t_hint) if t_hint is not None else "*"
+        log_semantic(f"freeIfTemp: Freeing temp={place} of kind={kind}")
         self.v.emitter.temp_pool.free(place, kind)
 
     def deepPlace(self, node) -> tuple[str | None, bool]:
@@ -59,6 +67,7 @@ class ExpressionsAnalyzer:
             return None, False
         p = getattr(node, "_place", None)
         if p is not None:
+            log_semantic(f"deepPlace: Found place={p} (is_temp={getattr(node, '_is_temp', False)}) in node={node}")
             return p, bool(getattr(node, "_is_temp", False))
         try:
             n = node.getChildCount()
@@ -71,7 +80,9 @@ class ExpressionsAnalyzer:
                 return p2, it2
         return None, False
 
+
     # ---------- Entradas de dispatch envoltorio ----------
+    @log_function
     def visitExpression(self, ctx):
         if ctx.getChildCount() == 0:
             return None
@@ -84,8 +95,10 @@ class ExpressionsAnalyzer:
             it = bool(getattr(child, "_is_temp", False))
         if p is not None:
             self.setPlace(ctx, p, it)
+            log_semantic(f"visitExpression: Set place for ctx={ctx} -> place={p}, is_temp={it}")
         return t
 
+    @log_function
     def visitExprNoAssign(self, ctx):
         if ctx.getChildCount() == 0:
             return None
@@ -98,9 +111,11 @@ class ExpressionsAnalyzer:
             it = bool(getattr(child, "_is_temp", False))
         if p is not None:
             self.setPlace(ctx, p, it)
+            log_semantic(f"visitExprNoAssign: Set place for ctx={ctx} -> place={p}, is_temp={it}")
         return t
 
     # ---------- Primarios ----------
+    @log_function
     def visitPrimaryExpr(self, ctx):
         # literalExpr | leftHandSide | '(' expression ')'
         if hasattr(ctx, "literalExpr") and ctx.literalExpr() is not None:
@@ -114,19 +129,22 @@ class ExpressionsAnalyzer:
             p = self.getPlace(ch)
             if p is not None:
                 self.setPlace(ctx, p, self.isTempNode(ch))
+                log_semantic(f"visitPrimaryExpr: Parentheses, propagated place={p}, is_temp={self.isTempNode(ch)}")
             return t
         return self.v.visitChildren(ctx)
 
-    # Literales e identificadores
+    @log_function
     def visitLiteralExpr(self, ctx):
         if hasattr(ctx, "arrayLiteral") and ctx.arrayLiteral() is not None:
             return self.visitArrayLiteral(ctx.arrayLiteral())
         value = ctx.getText()
-        log_semantic(f"Literal detected: {value}")
+        log_semantic(f"visitLiteralExpr: Literal detected: {value}")
         t = validateLiteral(value, self.v.errors, ctx)
         self.setPlace(ctx, value, False)
+        log_semantic(f"visitLiteralExpr: Set place for ctx={ctx} -> place={value}, is_temp=False")
         return t
 
+    @log_function
     def visitIdentifierExpr(self, ctx):
         name = ctx.getText()
         log_semantic(f"Identifier used: {name}")
@@ -158,8 +176,6 @@ class ExpressionsAnalyzer:
                 captured = []
 
             if captured:
-                # Materializamos la closure: ENV = mkenv(x,y,...) ; C = mkclos f_label, ENV
-                # 1) construir lista textual de lugares para las capturas (por ahora, por nombre)
                 args_txt = ",".join(captured) if captured else ""
                 env_t = self.v.emitter.temp_pool.newTemp("ref")
                 self.v.emitter.emit(Op.MKENV, arg1=args_txt, res=env_t)
@@ -168,18 +184,17 @@ class ExpressionsAnalyzer:
                 f_label = getattr(ftype, "_label", f"f_{sym.name}")
                 self.v.emitter.emit(Op.MKCLOS, arg1=f_label, arg2=env_t, res=clos_t)
 
-                # El identificador produce una *closure value*
                 self.setPlace(ctx, clos_t, True)
+                log_semantic(f"visitIdentifierExpr: Closure created for {name} -> place={clos_t}")
                 try:
-                    setattr(ftype, "_closure_place", clos_t)  # marcador para callc
+                    setattr(ftype, "_closure_place", clos_t)
                 except Exception:
                     pass
                 return ftype
 
-            # Si no hay capturas, el identificador queda como nombre (llamada directa con CALL)
             self.setPlace(ctx, name, False)
+            log_semantic(f"visitIdentifierExpr: Function identifier {name} -> place={name}")
             return ftype
-
 
         # Captura de variables externas si estamos dentro de una función
         if self.v.fn_ctx_stack:
@@ -191,10 +206,13 @@ class ExpressionsAnalyzer:
                 except Exception:
                     tstr = "<type>"
                 curr_fn_ctx["captures"].add((sym.name, tstr, sym.scope_id))
+                log_semantic(f"visitIdentifierExpr: Captured variable {name} from outer scope")
 
         self.setPlace(ctx, name, False)
+        log_semantic(f"visitIdentifierExpr: Variable identifier {name} -> place={name}")
         return sym.type
 
+    @log_function
     def visitArrayLiteral(self, ctx):
         expr_ctxs = list(ctx.expression())
         if not expr_ctxs:
@@ -202,6 +220,7 @@ class ExpressionsAnalyzer:
                 "Arreglo vacío sin tipo explícito no soportado aún.",
                 line=ctx.start.line, column=ctx.start.column))
             return ErrorType()
+
         elem_types = [self.v.visit(e) for e in expr_ctxs]
         if any(t is None for t in elem_types):
             return ErrorType()
@@ -230,18 +249,24 @@ class ExpressionsAnalyzer:
             pass
 
         self.setPlace(ctx, ctx.getText(), False)
+        log_semantic(f"visitArrayLiteral: Array literal -> place={ctx.getText()}, type={arr_t}")
         return arr_t
 
+    @log_function
     def visitThisExpr(self, ctx):
         if not self.v.in_method or not self.v.class_stack:
             self.v.appendErr(SemanticError(
                 "'this' solo puede usarse dentro de métodos de clase.",
                 line=ctx.start.line, column=ctx.start.column))
+            log_semantic("visitThisExpr: 'this' used outside method, error emitted")
             return ErrorType()
         self.setPlace(ctx, "this", False)
-        return ClassType(self.v.class_stack[-1])
+        cls_name = self.v.class_stack[-1]
+        log_semantic(f"visitThisExpr: 'this' in class {cls_name} -> place='this'")
+        return ClassType(cls_name)
 
     # ---------- Operadores con emisión TAC ----------
+    @log_function
     def visitAdditiveExpr(self, ctx):
         children = list(ctx.getChildren())
         if not children:
@@ -249,8 +274,7 @@ class ExpressionsAnalyzer:
 
         left_type = self.v.visit(children[0])
         left_node = children[0]
-        # left_place = self.getPlace(left_node) or left_node.getText()
-        left_place  = self.getPlace(left_node)  or self.deepPlace(left_node)[0]  or left_node.getText()
+        left_place = self.getPlace(left_node) or self.deepPlace(left_node)[0] or left_node.getText()
 
         i = 1
         current_type = left_type
@@ -261,7 +285,6 @@ class ExpressionsAnalyzer:
             op_txt = children[i].getText()
             right_node = children[i + 1]
             right_type = self.v.visit(right_node)
-            # right_place = self.getPlace(right_node) or right_node.getText()
             right_place = self.getPlace(right_node) or self.deepPlace(right_node)[0] or right_node.getText()
 
             res_type = resultArithmetic(current_type, right_type, op_txt) if op_txt != '%' else resultModulo(current_type, right_type)
@@ -269,10 +292,12 @@ class ExpressionsAnalyzer:
                 self.v.appendErr(SemanticError(
                     f"Operación aritmética inválida: {current_type} {op_txt} {right_type}",
                     line=ctx.start.line, column=ctx.start.column))
+                log_semantic(f"visitAdditiveExpr: Invalid arithmetic {current_type} {op_txt} {right_type}")
                 current_type = ErrorType()
             else:
                 t = self.v.emitter.temp_pool.newTemp(self.typeToTempKind(res_type))
                 self.v.emitter.emit(Op.BINARY, arg1=current_place, arg2=right_place, res=t, label=op_txt)
+                log_semantic(f"visitAdditiveExpr: {current_place} {op_txt} {right_place} -> {t}, type={res_type}")
                 self.freeIfTemp(current_node, current_type)
                 self.freeIfTemp(right_node, right_type)
                 current_place = t
@@ -283,6 +308,7 @@ class ExpressionsAnalyzer:
         self.setPlace(ctx, current_place, str(current_place).startswith("t"))
         return current_type
 
+    @log_function
     def visitMultiplicativeExpr(self, ctx):
         children = list(ctx.getChildren())
         if not children:
@@ -290,8 +316,7 @@ class ExpressionsAnalyzer:
 
         left_type = self.v.visit(children[0])
         left_node = children[0]
-        # left_place = self.getPlace(left_node) or left_node.getText()
-        left_place  = self.getPlace(left_node)  or self.deepPlace(left_node)[0]  or left_node.getText()
+        left_place = self.getPlace(left_node) or self.deepPlace(left_node)[0] or left_node.getText()
 
         i = 1
         current_type = left_type
@@ -302,7 +327,6 @@ class ExpressionsAnalyzer:
             op_txt = children[i].getText()
             right_node = children[i + 1]
             right_type = self.v.visit(right_node)
-            # right_place = self.getPlace(right_node) or right_node.getText()
             right_place = self.getPlace(right_node) or self.deepPlace(right_node)[0] or right_node.getText()
 
             res_type = resultModulo(current_type, right_type) if op_txt == '%' else resultArithmetic(current_type, right_type, op_txt)
@@ -311,10 +335,12 @@ class ExpressionsAnalyzer:
                 self.v.appendErr(SemanticError(
                     f"Operación multiplicativa inválida: {current_type} {op_txt} {right_type}",
                     line=ctx.start.line, column=ctx.start.column))
+                log_semantic(f"visitMultiplicativeExpr: Invalid operation {current_type} {op_txt} {right_type}")
                 current_type = ErrorType()
             else:
                 t = self.v.emitter.temp_pool.newTemp(self.typeToTempKind(res_type))
                 self.v.emitter.emit(Op.BINARY, arg1=current_place, arg2=right_place, res=t, label=op_txt)
+                log_semantic(f"visitMultiplicativeExpr: {current_place} {op_txt} {right_place} -> {t}, type={res_type}")
                 self.freeIfTemp(current_node, current_type)
                 self.freeIfTemp(right_node, right_type)
                 current_place = t
@@ -325,6 +351,7 @@ class ExpressionsAnalyzer:
         self.setPlace(ctx, current_place, str(current_place).startswith("t"))
         return current_type
 
+    @log_function
     def visitRelationalExpr(self, ctx):
         children = list(ctx.getChildren())
         if not children:
@@ -332,8 +359,7 @@ class ExpressionsAnalyzer:
 
         left_node = children[0]
         left_type = self.v.visit(left_node)
-        # left_place = self.getPlace(left_node) or left_node.getText()
-        left_place  = self.getPlace(left_node)  or self.deepPlace(left_node)[0]  or left_node.getText()
+        left_place = self.getPlace(left_node) or self.deepPlace(left_node)[0] or left_node.getText()
 
         i = 1
         last_type = left_type
@@ -346,7 +372,6 @@ class ExpressionsAnalyzer:
             op_txt = children[i].getText()
             right_node = children[i + 1]
             right_type = self.v.visit(right_node)
-            # right_place = self.getPlace(right_node) or right_node.getText()
             right_place = self.getPlace(right_node) or self.deepPlace(right_node)[0] or right_node.getText()
 
             res = resultRelational(last_type, right_type)
@@ -354,11 +379,13 @@ class ExpressionsAnalyzer:
                 self.v.appendErr(SemanticError(
                     f"Comparación no válida: {last_type} {op_txt} {right_type}",
                     line=ctx.start.line, column=ctx.start.column))
+                log_semantic(f"visitRelationalExpr: Invalid comparison {last_type} {op_txt} {right_type}")
                 final_type = ErrorType()
                 final_place = last_place
             else:
                 t = self.v.emitter.temp_pool.newTemp(self.typeToTempKind(res))
                 self.v.emitter.emit(Op.BINARY, arg1=last_place, arg2=right_place, res=t, label=op_txt)
+                log_semantic(f"visitRelationalExpr: {last_place} {op_txt} {right_place} -> {t}, type={res}")
                 self.freeIfTemp(last_node, last_type)
                 self.freeIfTemp(right_node, right_type)
                 final_type = res
@@ -371,6 +398,7 @@ class ExpressionsAnalyzer:
         self.setPlace(ctx, final_place, str(final_place).startswith("t"))
         return final_type if final_type is not None else last_type
 
+    @log_function
     def visitEqualityExpr(self, ctx):
         children = list(ctx.getChildren())
         if not children:
@@ -378,8 +406,7 @@ class ExpressionsAnalyzer:
 
         left_node = children[0]
         left_type = self.v.visit(left_node)
-        # left_place = self.getPlace(left_node) or left_node.getText()
-        left_place  = self.getPlace(left_node)  or self.deepPlace(left_node)[0]  or left_node.getText()
+        left_place = self.getPlace(left_node) or self.deepPlace(left_node)[0] or left_node.getText()
 
         i = 1
         last_type = left_type
@@ -392,7 +419,6 @@ class ExpressionsAnalyzer:
             op_txt = children[i].getText()
             right_node = children[i + 1]
             right_type = self.v.visit(right_node)
-            # right_place = self.getPlace(right_node) or right_node.getText()
             right_place = self.getPlace(right_node) or self.deepPlace(right_node)[0] or right_node.getText()
 
             res = resultEquality(last_type, right_type)
@@ -400,11 +426,13 @@ class ExpressionsAnalyzer:
                 self.v.appendErr(SemanticError(
                     f"Igualdad no válida: {last_type} {op_txt} {right_type}",
                     line=ctx.start.line, column=ctx.start.column))
+                log_semantic(f"visitEqualityExpr: Invalid equality {last_type} {op_txt} {right_type}")
                 final_type = ErrorType()
                 final_place = last_place
             else:
                 t = self.v.emitter.temp_pool.newTemp(self.typeToTempKind(res))
                 self.v.emitter.emit(Op.BINARY, arg1=last_place, arg2=right_place, res=t, label=op_txt)
+                log_semantic(f"visitEqualityExpr: {last_place} {op_txt} {right_place} -> {t}, type={res}")
                 self.freeIfTemp(last_node, last_type)
                 self.freeIfTemp(right_node, right_type)
                 final_type = res
@@ -417,6 +445,7 @@ class ExpressionsAnalyzer:
         self.setPlace(ctx, final_place, str(final_place).startswith("t"))
         return final_type if final_type is not None else last_type
 
+    @log_function
     def visitLogicalAndExpr(self, ctx):
         children = list(ctx.getChildren())
         if not children:
@@ -424,8 +453,7 @@ class ExpressionsAnalyzer:
 
         left_node = children[0]
         left_type = self.v.visit(left_node)
-        # left_place = self.getPlace(left_node) or left_node.getText()
-        left_place  = self.getPlace(left_node)  or self.deepPlace(left_node)[0]  or left_node.getText()
+        left_place = self.getPlace(left_node) or self.deepPlace(left_node)[0] or left_node.getText()
 
         i = 1
         current_type = left_type
@@ -435,7 +463,6 @@ class ExpressionsAnalyzer:
         while i < len(children):
             right_node = children[i + 1]
             right_type = self.v.visit(right_node)
-            # right_place = self.getPlace(right_node) or right_node.getText()
             right_place = self.getPlace(right_node) or self.deepPlace(right_node)[0] or right_node.getText()
 
             res = resultLogical(current_type, right_type)
@@ -443,10 +470,12 @@ class ExpressionsAnalyzer:
                 self.v.appendErr(SemanticError(
                     f"Operación lógica inválida: {current_type} && {right_type}",
                     line=ctx.start.line, column=ctx.start.column))
+                log_semantic(f"visitLogicalAndExpr: Invalid logical AND {current_type} && {right_type}")
                 current_type = ErrorType()
             else:
                 t = self.v.emitter.temp_pool.newTemp(self.typeToTempKind(res))
                 self.v.emitter.emit(Op.BINARY, arg1=current_place, arg2=right_place, res=t, label="&&")
+                log_semantic(f"visitLogicalAndExpr: {current_place} && {right_place} -> {t}, type={res}")
                 self.freeIfTemp(current_node, current_type)
                 self.freeIfTemp(right_node, right_type)
                 current_place = t
@@ -457,6 +486,7 @@ class ExpressionsAnalyzer:
         self.setPlace(ctx, current_place, str(current_place).startswith("t"))
         return current_type
 
+    @log_function
     def visitLogicalOrExpr(self, ctx):
         children = list(ctx.getChildren())
         if not children:
@@ -464,8 +494,7 @@ class ExpressionsAnalyzer:
 
         left_node = children[0]
         left_type = self.v.visit(left_node)
-        # left_place = self.getPlace(left_node) or left_node.getText()
-        left_place  = self.getPlace(left_node)  or self.deepPlace(left_node)[0]  or left_node.getText()
+        left_place = self.getPlace(left_node) or self.deepPlace(left_node)[0] or left_node.getText()
 
         i = 1
         current_type = left_type
@@ -475,7 +504,6 @@ class ExpressionsAnalyzer:
         while i < len(children):
             right_node = children[i + 1]
             right_type = self.v.visit(right_node)
-            # right_place = self.getPlace(right_node) or right_node.getText()
             right_place = self.getPlace(right_node) or self.deepPlace(right_node)[0] or right_node.getText()
 
             res = resultLogical(current_type, right_type)
@@ -483,10 +511,12 @@ class ExpressionsAnalyzer:
                 self.v.appendErr(SemanticError(
                     f"Operación lógica inválida: {current_type} || {right_type}",
                     line=ctx.start.line, column=ctx.start.column))
+                log_semantic(f"visitLogicalOrExpr: Invalid logical OR {current_type} || {right_type}")
                 current_type = ErrorType()
             else:
                 t = self.v.emitter.temp_pool.newTemp(self.typeToTempKind(res))
                 self.v.emitter.emit(Op.BINARY, arg1=current_place, arg2=right_place, res=t, label="||")
+                log_semantic(f"visitLogicalOrExpr: {current_place} || {right_place} -> {t}, type={res}")
                 self.freeIfTemp(current_node, current_type)
                 self.freeIfTemp(right_node, right_type)
                 current_place = t
@@ -497,14 +527,13 @@ class ExpressionsAnalyzer:
         self.setPlace(ctx, current_place, str(current_place).startswith("t"))
         return current_type
 
+    @log_function
     def visitUnaryExpr(self, ctx):
         if ctx.getChildCount() == 2:
             op_txt = ctx.getChild(0).getText()
             inner_node = ctx.unaryExpr()
             inner_type = self.v.visit(inner_node)
-            # inner_place = self.getPlace(inner_node) or inner_node.getText()
             inner_place = self.getPlace(inner_node) or self.deepPlace(inner_node)[0] or inner_node.getText()
-
 
             if op_txt == '-':
                 res = resultUnaryMinus(inner_type)
@@ -512,9 +541,11 @@ class ExpressionsAnalyzer:
                     self.v.appendErr(SemanticError(
                         f"Operador '-' inválido sobre tipo {inner_type}",
                         line=ctx.start.line, column=ctx.start.column))
+                    log_semantic(f"visitUnaryExpr: Invalid unary minus on {inner_type}")
                     return res
                 t = self.v.emitter.temp_pool.newTemp(self.typeToTempKind(res))
                 self.v.emitter.emit(Op.UNARY, arg1=inner_place, res=t, label='-')
+                log_semantic(f"visitUnaryExpr: -{inner_place} -> {t}, type={res}")
                 self.freeIfTemp(inner_node, inner_type)
                 self.setPlace(ctx, t, True)
                 return res
@@ -525,9 +556,11 @@ class ExpressionsAnalyzer:
                     self.v.appendErr(SemanticError(
                         f"Operador '!' inválido sobre tipo {inner_type}",
                         line=ctx.start.line, column=ctx.start.column))
+                    log_semantic(f"visitUnaryExpr: Invalid unary NOT on {inner_type}")
                     return res
                 t = self.v.emitter.temp_pool.newTemp(self.typeToTempKind(res))
                 self.v.emitter.emit(Op.UNARY, arg1=inner_place, res=t, label='!')
+                log_semantic(f"visitUnaryExpr: !{inner_place} -> {t}, type={res}")
                 self.freeIfTemp(inner_node, inner_type)
                 self.setPlace(ctx, t, True)
                 return res
@@ -540,18 +573,22 @@ class ExpressionsAnalyzer:
                 self.setPlace(ctx, p, self.isTempNode(ctx.primaryExpr()))
             return t
 
+
     # ---------- Objetos / propiedades / new ----------
+    @log_function
     def visitNewExpr(self, ctx):
         class_name = ctx.Identifier().getText()
+        log_semantic(f"visitNewExpr: Creating instance of class '{class_name}'")
 
         # Verificación de clase
         if not self.v.class_handler.exists(class_name):
             self.v.appendErr(SemanticError(
                 f"Clase '{class_name}' no declarada.",
                 line=ctx.start.line, column=ctx.start.column))
+            log_semantic(f"visitNewExpr: Error - class '{class_name}' not declared")
             return ErrorType()
 
-        # Recolectar nodos + tipos de argumentos (izq→der)
+        # Recolectar nodos + tipos de argumentos
         args_nodes = list(ctx.arguments().expression()) if ctx.arguments() else []
         arg_types = [self.v.visit(e) for e in args_nodes]
 
@@ -568,20 +605,22 @@ class ExpressionsAnalyzer:
             base = self.v.class_handler._classes.get(curr).base if hasattr(self.v.class_handler, "_classes") else None
             curr = base
 
-        # Validaciones de aridad/tipos (sin abortar la emisión)
+        # Validaciones de aridad/tipos
         if found_sig is None:
             if len(arg_types) != 0:
                 self.v.appendErr(SemanticError(
                     f"Constructor de '{class_name}' no declarado; se esperaban 0 argumentos.",
                     line=ctx.start.line, column=ctx.start.column))
+                log_semantic(f"visitNewExpr: Error - no constructor for '{class_name}', got {len(arg_types)} args")
         else:
             ctor_owner, (param_types, rtype) = found_sig
-            expected = len(param_types) - 1  # quitar 'this'
+            expected = len(param_types) - 1
             if len(arg_types) != expected:
                 self.v.appendErr(SemanticError(
                     f"Número de argumentos inválido para '{ctor_owner}.constructor': "
                     f"esperados {expected}, recibidos {len(arg_types)}.",
                     line=ctx.start.line, column=ctx.start.column))
+                log_semantic(f"visitNewExpr: Error - invalid number of args for {ctor_owner}.constructor")
             else:
                 for i, (pt, at) in enumerate(zip(param_types[1:], arg_types), start=1):
                     if not isAssignable(pt, at):
@@ -589,75 +628,64 @@ class ExpressionsAnalyzer:
                             f"Argumento #{i} incompatible en constructor de '{ctor_owner}': "
                             f"no se puede asignar {at} a {pt}.",
                             line=ctx.start.line, column=ctx.start.column))
+                        log_semantic(f"visitNewExpr: Error - arg #{i} type mismatch in {ctor_owner}.constructor")
 
         # === Emisión TAC real ===
-        # 1) Reserva del objeto: t_obj = newobj C, size(C)
         obj_size = 0
         try:
             obj_size = int(self.v.class_handler.get_object_size(class_name))
         except Exception:
-            obj_size = 0  # fallback defensivo
+            obj_size = 0
 
         t_obj = self.v.emitter.temp_pool.newTemp("ref")
         self.v.emitter.emit(Op.NEWOBJ, arg1=class_name, arg2=str(obj_size), res=t_obj)
+        log_semantic(f"visitNewExpr: NEWOBJ {class_name}, size={obj_size} -> {t_obj}")
 
-        # 2) Si hay constructor, emite: param this; param a1..an; call f_C_constructor, n+1
         if found_sig is not None:
             ctor_owner, (_param_types, _rtype) = found_sig
-
-            # param this
             self.v.emitter.emit(Op.PARAM, arg1=t_obj)
             n_params = 1
-
-            # params de usuario (izq→der)
             for e in args_nodes:
                 p, is_tmp = self.deepPlace(e)
                 aplace = p or e.getText()
                 self.v.emitter.emit(Op.PARAM, arg1=aplace)
+                log_semantic(f"visitNewExpr: PARAM {aplace}")
                 if is_tmp:
                     self.v.emitter.temp_pool.free(aplace, "*")
                 n_params += 1
-
-            # label del ctor (coherente con cómo registraste métodos: f_<Class>_<method>)
             f_label = f"f_{ctor_owner}_constructor"
             self.v.emitter.emit(Op.CALL, arg1=f_label, arg2=str(n_params))
+            log_semantic(f"visitNewExpr: CALL {f_label}, n_params={n_params}")
 
-        # El valor de 'new' es el objeto materializado
         self.setPlace(ctx, t_obj, True)
         return ClassType(class_name)
 
-
+    @log_function
     def visitPropertyAccessExpr(self, ctx):
-        """
-        expression '.' Identifier
-        - Si es atributo: devuelve su tipo (con herencia).
-        - Si es método: devuelve FunctionType(params_sin_this, ret), buscando en la jerarquía.
-        La emisión de lectura/escritura/llamada se maneja fuera (LValues / Funcs).
-        """
         obj_type = self.v.visit(ctx.expression())
+        prop_name = ctx.Identifier().getText()
+        log_semantic(f"visitPropertyAccessExpr: Accessing '{prop_name}' on {obj_type}")
 
         if not isinstance(obj_type, ClassType):
             self.v.appendErr(SemanticError(
                 f"No se puede acceder a propiedades de tipo '{obj_type}'.",
                 line=ctx.start.line, column=ctx.start.column))
+            log_semantic(f"visitPropertyAccessExpr: Error - type {obj_type} has no properties")
             return ErrorType()
 
         class_name = obj_type.name
-        prop_name = ctx.Identifier().getText()
 
-        # 1) Atributo (con herencia)
+        # 1) Atributo
         attr_t = self.v.class_handler.get_attribute_type(class_name, prop_name)
         if attr_t is not None:
+            log_semantic(f"visitPropertyAccessExpr: Found attribute '{prop_name}' of type {attr_t}")
             return attr_t
 
-        # 2) Método en esta clase o en bases (method_registry y, como respaldo, symbol table)
-        #    Construimos FunctionType quitando 'this' del inicio si existe.
+        # 2) Método
         def lookupMethodInHierarchy(cls: str, mname: str):
-            # registry directo
             sig = self.v.method_registry.lookup(f"{cls}.{mname}")
             if sig is not None:
                 return cls, sig
-            # subir a bases
             try:
                 curr = cls
                 seen = set()
@@ -672,12 +700,10 @@ class ExpressionsAnalyzer:
                     curr = base
             except Exception:
                 pass
-            # respaldo: símbolo global "Clase.metodo"
             qname = f"{cls}.{mname}"
             sym = self.v.scopeManager.lookup(qname)
             if sym is not None and sym.category == SymbolCategory.FUNCTION:
                 ret_t = sym.return_type if sym.return_type is not None else VoidType()
-                # param_types ya incluiría 'this' como primero
                 return cls, (sym.param_types, ret_t)
             return None, None
 
@@ -685,7 +711,6 @@ class ExpressionsAnalyzer:
         if sig is not None:
             param_types, ret_t = sig
             ret_t = ret_t if ret_t is not None else VoidType()
-            # quitar 'this' si viene
             params_wo_this = param_types[1:] if len(param_types) > 0 else []
             ftype = FunctionType(params_wo_this, ret_t)
             try:
@@ -693,13 +718,16 @@ class ExpressionsAnalyzer:
                 setattr(ftype, "_decl_owner", owner or class_name)
             except Exception:
                 pass
+            log_semantic(f"visitPropertyAccessExpr: Found method '{prop_name}' of type {ftype}")
             return ftype
 
-        # 3) Ninguno: error
         self.v.appendErr(SemanticError(
             f"Miembro '{prop_name}' no declarado en clase '{class_name}'.",
             line=ctx.start.line, column=ctx.start.column))
+        log_semantic(f"visitPropertyAccessExpr: Error - member '{prop_name}' not found in class '{class_name}'")
         return ErrorType()
 
+    @log_function
     def visitLeftHandSide(self, ctx):
+        log_semantic("visitLeftHandSide: delegating to lvalues")
         return self.lvalues.visitLeftHandSide(ctx)

@@ -1,6 +1,6 @@
 from semantic.custom_types import (
     IntegerType, StringType, BoolType, FloatType, VoidType,
-    ClassType, ArrayType, NullType, ErrorType
+    ClassType, ArrayType
 )
 from semantic.errors import SemanticError
 from logs.logger_semantic import log_semantic
