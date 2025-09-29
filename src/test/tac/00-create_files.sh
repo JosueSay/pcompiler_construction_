@@ -272,6 +272,40 @@ for (i = 0; ; i = i + 1) {
 }
 EOF
 
+cat <<'EOF' > "$TARGET_DIR/continue.cps"
+function main(): void {
+  let s: integer = 0;
+  let i: integer = 0;
+  while (i < 5) {
+    i = i + 1;
+    if (i % 2 == 0) { continue; }
+    s = s + i;   // sólo impares
+  }
+}
+EOF
+
+cat <<'EOF' > "$TARGET_DIR/closure.cps"
+// ✅ Captura de variable externa por función anidada (closure) y retorno correcto.
+function mk(): integer {
+  let base: integer = 10;          // variable externa
+  function add(n: integer): integer {
+    return base + n;               // ok: usa 'base' capturada
+  }
+  return add(5);                   // ok: integer
+}
+
+let r: integer = mk();             // ok
+EOF
+
+cat <<'EOF' > "$TARGET_DIR/negacion.cps"
+function main(): void {
+  let x: integer = 1;
+  if (!(x == 1)) { x = 9; } else { x = 7; }
+}
+EOF
+
+
+
 # --- GRUPO B: variantes de indexación ---
 cat <<'EOF' > "$TARGET_DIR/variante1.cps"
 let v: integer[] = [10, 20, 30];
@@ -528,9 +562,11 @@ for f in expresiones_puras.cps const_inicializada.cps acceso_propiedad_lectura_y
           class_test_v01.cps class_test_v02.cps class_test_v03.cps class_test_v04.cps \
           class_test_v05.cps class_test_v06.cps class_test_v07.cps class_test_v08.cps \
           class_test_v09.cps class_test_v10.cps class_test_v11.cps class_test_v12.cps \
+          continue.cps closure.cps negacion.cps \
           return_void_y_barrera.cps for_sin_condicion_explicita.cps; do
   echo -e "\t- ${GREEN}$f${RESET}"
 done
+
 
 echo -e "\n${MAGENTA}--- GRUPO B: variantes de indexación ---${RESET}"
 for f in variante1.cps variante2.cps variante3.cps variante4.cps variante5.cps variante6.cps; do
