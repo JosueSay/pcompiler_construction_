@@ -374,18 +374,163 @@ class StatementsAnalyzer:
 
         # Aceptamos exactamente OBJ.PROP (un solo '.'); si hay más niveles, que lo maneje el camino general
         parts = base_txt.split('.')
-        if len(parts) != 2:
-            return None
-        obj_txt, prop_name = parts[0], parts[1]
-        if not prop_name:
-            return None
+        if len(parts) < 2:
+            return None  # se requieren al menos 2 partes: obj + alguna propiedad
 
-        # Debe existir realmente el IndexExpr
+        obj_txt = parts[0]              # "a" | "this"
+        prop_chain = parts[1:]          # ["b", "c"]
+
         idx_node = self.findDesc(lhs_ctx, CompiscriptParser.IndexExprContext)
         if idx_node is None:
             return None
 
-        return (obj_txt, prop_name, idx_node)
+        return (obj_txt, prop_chain, idx_node)
+
+    @log_function
+    def handleChainedPropertyIndexStore(self, obj_txt, prop_chain, idx_node, rhs_node, ctx_stmt):
+        """
+        Genera:
+            t1 = FIELD_LOAD obj.p1
+            t2 = FIELD_LOAD t1.p2
+            ...
+            t_arr = FIELD_LOAD t_{n-1}.pn         ; debe ser ArrayType
+            ; bounds check
+            t_len = len t_arr
+            if idx<0 goto L_oob
+            if idx>=t_len goto L_oob
+            goto L_ok
+          L_oob: call __bounds_error, 0
+          L_ok:  t_arr[idx] = rhs
+        Libera temporales usados (idx, rhs, t_len y t_arr).
+        """
+
+        log_semantic(f"[CHAIN_INDEX_STORE] inicio: {obj_txt}.{'.'.join(prop_chain)}[{idx_node.getText()}] = {rhs_node.getText()}")
+
+        # 1) Resolver tipo/place del objeto base ('this' o identificador)
+        if obj_txt == 'this':
+            obj_place = 'this'
+            if not self.v.class_stack:
+                self.v.appendErr(SemanticError("Uso de 'this' fuera de una clase.",
+                                            line=ctx_stmt.start.line, column=ctx_stmt.start.column))
+                return
+            base_type = ClassType(self.v.class_stack[-1])
+        else:
+            sym = self.v.scopeManager.lookup(obj_txt)
+            if sym is None:
+                self.v.appendErr(SemanticError(f"Uso de variable no declarada: '{obj_txt}'.",
+                                            line=ctx_stmt.start.line, column=ctx_stmt.start.column))
+                return
+
+            # ✅ comprobación robusta de constante
+            cat = getattr(sym, "category", None)
+            if cat == SymbolCategory.CONSTANT or getattr(cat, "name", None) == "CONSTANT" or cat == "CONSTANT":
+                self.v.appendErr(SemanticError(f"No se puede modificar la constante '{obj_txt}'.",
+                                            line=ctx_stmt.start.line, column=ctx_stmt.start.column))
+                return
+
+            obj_place = obj_txt
+            base_type = getattr(sym, "type", None)
+
+
+        # 2) Recorrer la cadena de propiedades haciendo FIELD_LOAD
+        curr_place = obj_place
+        curr_type  = base_type
+        prev_temp_to_free = None
+
+        for k, prop_name in enumerate(prop_chain):
+            if not isinstance(curr_type, ClassType):
+                self.v.appendErr(SemanticError(
+                    f"Acceso a propiedad '{prop_name}' sobre tipo no-objeto: {curr_type}.",
+                    line=ctx_stmt.start.line, column=ctx_stmt.start.column))
+                # liberar temp pendiente
+                if prev_temp_to_free:
+                    self.v.emitter.temp_pool.free(prev_temp_to_free, "*")
+                return
+
+            attr_t = self.v.class_handler.get_attribute_type(curr_type.name, prop_name)
+            if attr_t is None:
+                self.v.appendErr(SemanticError(
+                    f"La clase {curr_type} no tiene un atributo '{prop_name}'.",
+                    line=ctx_stmt.start.line, column=ctx_stmt.start.column))
+                if prev_temp_to_free:
+                    self.v.emitter.temp_pool.free(prev_temp_to_free, "*")
+                return
+
+            t_next = self.v.exprs.newTempFor(attr_t)
+            qfld = self.v.emitter.emit(Op.FIELD_LOAD, arg1=curr_place, res=t_next, label=prop_name)
+            log_semantic(f"[CHAIN_INDEX_STORE] FIELD_LOAD: {curr_place}.{prop_name} -> {t_next}")
+
+            # Metadatos opcionales (offset/owner)
+            try:
+                off = self.v.class_handler.get_field_offset(curr_type.name, prop_name)
+                if qfld is not None and off is not None:
+                    setattr(qfld, "_field_offset", off)
+                    setattr(qfld, "_field_owner", curr_type.name)
+            except Exception:
+                pass
+
+            # liberar el temp previo si era un temp intermedio
+            if prev_temp_to_free and prev_temp_to_free != obj_place:
+                self.v.emitter.temp_pool.free(prev_temp_to_free, "*")
+
+            prev_temp_to_free = t_next
+            curr_place = t_next
+            curr_type  = attr_t
+
+        # 3) Al final de la cadena, esperamos un ArrayType
+        if not isinstance(curr_type, ArrayType):
+            self.v.appendErr(SemanticError(
+                f"Índice aplicado sobre un miembro que no es arreglo: {curr_type}.",
+                line=ctx_stmt.start.line, column=ctx_stmt.start.column))
+            if prev_temp_to_free:
+                self.v.emitter.temp_pool.free(prev_temp_to_free, "*")
+            return
+
+        arr_place = curr_place
+        arr_type  = curr_type
+
+        # 4) Tipos de idx y rhs (sin emitir aún)
+        try:
+            idx_expr = idx_node.expression()
+        except Exception:
+            idx_expr = idx_node
+
+        idx_t = self.v.visit(idx_expr)
+        rhs_t = self.v.visit(rhs_node)
+        if not isinstance(idx_t, IntegerType):
+            self.v.appendErr(SemanticError(
+                f"Índice no entero en asig. de arreglo: se encontró {idx_t}.",
+                line=ctx_stmt.start.line, column=ctx_stmt.start.column))
+            self.v.emitter.temp_pool.free(arr_place, "*")
+            return
+
+        elem_t = arr_type.elem_type
+        if rhs_t is None or isinstance(rhs_t, ErrorType) or not isAssignable(elem_t, rhs_t):
+            self.v.appendErr(SemanticError(
+                f"Asignación incompatible: no se puede asignar {rhs_t} a {elem_t}.",
+                line=ctx_stmt.start.line, column=ctx_stmt.start.column))
+            self.v.emitter.temp_pool.free(arr_place, "*")
+            return
+
+        # 5) deepPlace para idx y rhs
+        p_idx, it_idx = self.v.exprs.deepPlace(idx_expr)
+        idx_place = p_idx or idx_expr.getText()
+        p_rhs, it_rhs = self.v.exprs.deepPlace(rhs_node)
+        rhs_place = p_rhs or rhs_node.getText()
+
+        # 6) Bounds check + store
+        t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, arr_place)
+        self.v.emitter.emit(Op.INDEX_STORE, arg1=arr_place, res=rhs_place, label=idx_place)
+        log_semantic(f"[CHAIN_INDEX_STORE] emitido: {arr_place}[{idx_place}] = {rhs_place}")
+
+        # 7) Liberaciones
+        self.v.emitter.temp_pool.free(t_len, "*")
+        if it_idx:
+            self.v.emitter.temp_pool.free(idx_place, "*")
+        if it_rhs:
+            self.v.emitter.temp_pool.free(rhs_place, "*")
+        self.v.emitter.temp_pool.free(arr_place, "*")
+
 
     @log_function
     def handlePropertyIndexStore(self, obj_txt, prop_name, idx_node, rhs_node, ctx_stmt):
@@ -513,7 +658,10 @@ class StatementsAnalyzer:
         txt = getattr(expr, "getText", lambda: "")()
         log_semantic(f"[stmt] visitExpressionStatement: '{txt}'")
 
-        is_assign = self.hasTopLevelAssign(expr) or ('=' in txt and not any(op in txt for op in ('==','!=','<=','>=')))
+        # Detectar si la expresión es un assignment
+        is_assign = self.hasTopLevelAssign(expr) or (
+            '=' in txt and not any(op in txt for op in ('==','!=','<=','>='))
+        )
         log_semantic(f"[stmt] detectado assignment={is_assign}")
 
         if is_assign:
@@ -524,28 +672,35 @@ class StatementsAnalyzer:
                 rhs_node = self.rhsOfAssignExpr(expr)
                 if rhs_node is not None:
                     self.handleSimpleIndexStore(base_name, idx_node, rhs_node, ctx)
-                    self.v.emitter.temp_pool.resetPerStatement()   # ← añadir
+                    self.v.emitter.temp_pool.resetPerStatement()
                     return None
 
-            # 2) obj.prop[i] = rhs (incluye this.prop[i])
+            # 2) obj.prop[i] = rhs  o cadenas largas obj.p1.p2...[i] = rhs
             mp = self.matchPropertyIndexAssign(expr)
             if mp is not None:
-                obj_txt, prop_name, idx_node = mp
+                obj_txt, prop_chain, idx_node = mp
                 rhs_node = self.rhsOfAssignExpr(expr)
                 if rhs_node is not None:
-                    self.handlePropertyIndexStore(obj_txt, prop_name, idx_node, rhs_node, ctx)
-                    self.v.emitter.temp_pool.resetPerStatement()   # ← añadir
+                    if len(prop_chain) == 1:
+                        # caso antiguo (una sola propiedad)
+                        self.handlePropertyIndexStore(obj_txt, prop_chain[0], idx_node, rhs_node, ctx)
+                    else:
+                        # cadenas largas
+                        self.handleChainedPropertyIndexStore(obj_txt, prop_chain, idx_node, rhs_node, ctx)
+                    self.v.emitter.temp_pool.resetPerStatement()
                     return None
 
-            # 3) fallback
+            # 3) fallback para cualquier otra asignación
             self.visitAssignment(expr)
             self.v.emitter.temp_pool.resetPerStatement()
             return None
 
+        # Si no es assignment, simplemente visitamos la expresión
         t = self.v.visit(expr)
         log_semantic(f"[stmt] visitExpressionStatement: tipo expr='{t}'")
         self.v.emitter.temp_pool.resetPerStatement()
         return t
+
 
 
     # ------------------------------------------------------------------
@@ -1047,6 +1202,8 @@ class StatementsAnalyzer:
                 log_semantic(f"[INDEX_STORE] tipos -> arr:{arr_t}, idx:{idx_t}, rhs:{rhs_t}")
                 log_semantic(f"[INDEX_STORE] deepPlace -> idx='{idx_place}', rhs='{rhs_place}'")
 
+                # --- Bounds check antes del store ---
+                t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, base_name)
                 self.v.emitter.emit(Op.INDEX_STORE, arg1=base_name, res=rhs_place, label=idx_place)
                 log_semantic(f"[INDEX_STORE] emitido: {base_name}[{idx_place}] = {rhs_place}")
 
@@ -1054,8 +1211,10 @@ class StatementsAnalyzer:
                     self.v.emitter.temp_pool.free(idx_place, "*")
                 if it_rhs:
                     self.v.emitter.temp_pool.free(rhs_place, "*")
+                self.v.emitter.temp_pool.free(t_len, "*")
                 self.v.emitter.temp_pool.resetPerStatement()
                 return
+
 
         # (2) propiedad: obj.prop = expr (solo cuando hay Identifier() en ctx)
         if n == 2:
