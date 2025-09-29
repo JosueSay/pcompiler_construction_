@@ -13,6 +13,6 @@ done
 # Recorre todos los archivos .cps y los pasa a run.sh
 for f in "$RUTA"/*.cps; do
   echo ">> Ejecutando $f"
-  CPS_VERBOSE=1 ./scripts/run.sh "$f"
+  CPS_VERBOSE=0 ./scripts/run.sh "$f"
   echo ""
 done

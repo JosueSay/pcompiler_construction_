@@ -305,6 +305,30 @@ function main(): void {
 EOF
 
 
+cat <<'EOF' > "$TARGET_DIR/literal_arreglo.cps"
+// ✅ Literal de arreglo homogéneo y accesos correctos.
+let xs: integer[] = [1, 2, 3];      // ok: todos son integer
+let a: integer = xs[0];             // ok: índice integer
+let m: integer[][] = [[1,2],[3,4]]; // ok: matriz homogénea
+let fila: integer[] = m[1];         // ok: acceso devuelve integer[]
+EOF
+
+cat <<'EOF' > "$TARGET_DIR/obb_negativo.cps"
+function main(): void {
+  let a: integer[] = [1,2,3];
+  a[-1] = 9;       // debe generar checks y OOB branch
+}
+EOF
+
+
+cat <<'EOF' > "$TARGET_DIR/obb_ge_len.cps"
+function main(): void {
+  let a: integer[] = [1,2,3];
+  let i: integer = 3;
+  let x: integer = a[i];  // debe generar checks y OOB branch
+}
+EOF
+
 
 # --- GRUPO B: variantes de indexación ---
 cat <<'EOF' > "$TARGET_DIR/variante1.cps"
@@ -562,7 +586,7 @@ for f in expresiones_puras.cps const_inicializada.cps acceso_propiedad_lectura_y
           class_test_v01.cps class_test_v02.cps class_test_v03.cps class_test_v04.cps \
           class_test_v05.cps class_test_v06.cps class_test_v07.cps class_test_v08.cps \
           class_test_v09.cps class_test_v10.cps class_test_v11.cps class_test_v12.cps \
-          continue.cps closure.cps negacion.cps \
+          continue.cps closure.cps negacion.cps literal_arreglo.cps obb_negativo.csp obb_ge_len.cps \
           return_void_y_barrera.cps for_sin_condicion_explicita.cps; do
   echo -e "\t- ${GREEN}$f${RESET}"
 done
