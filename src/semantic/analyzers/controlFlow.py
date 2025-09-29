@@ -649,27 +649,27 @@ class ControlFlowAnalyzer:
         ldef = self.v.emitter.newLabel("Ldef") if default_stmts is not None else lend
         lcases = [self.v.emitter.newLabel("Lcase") for _ in cases]
 
-        log_semantic(f"[switch] etiquetas generadas: lend={lend}, ldef={ldef}, lcases={[l.getName() for l in lcases]}")
+        log_semantic(f"[switch] etiquetas generadas: lend={lend}, ldef={ldef}, lcases={lcases}")
 
         for (cexpr, _), lcase in zip(cases, lcases):
             cond_text = f"{discr_text} == {cexpr.getText()}"
             self.v.emitter.emitIfGoto(cond_text, lcase)
-            log_semantic(f"[switch] emitIfGoto: {cond_text} -> {lcase.getName()}")
+            log_semantic(f"[switch] emitIfGoto: {cond_text} -> {lcase}")
         self.v.emitter.emitGoto(ldef)
-        log_semantic(f"[switch] emitGoto default/end: {ldef.getName()}")
+        log_semantic(f"[switch] emitGoto default/end: {ldef}")
 
         self.switch_ctx_stack.append({"break": lend, "continue": lend})
         log_semantic(f"[switch] contexto stack actualizado: break={lend}, continue={lend}")
 
         for (_, st_list), lcase in zip(cases, lcases):
             self.v.emitter.emitLabel(lcase)
-            log_semantic(f"[switch] etiqueta caso emitida: {lcase.getName()}")
+            log_semantic(f"[switch] etiqueta caso emitida: {lcase}")
             for st in st_list:
                 self.v.visit(st)
 
         if default_stmts is not None:
             self.v.emitter.emitLabel(ldef)
-            log_semantic(f"[switch] etiqueta default emitida: {ldef.getName()}")
+            log_semantic(f"[switch] etiqueta default emitida: {ldef}")
             for st in default_stmts:
                 self.v.visit(st)
 
@@ -700,7 +700,7 @@ class ControlFlowAnalyzer:
         # TAC
         self.v.emitter.emitGoto(target)
         self.v.emitter.markFlowTerminated()
-        log_semantic(f"[break] emitGoto a {target.getName()} y flujo marcado como terminado")
+        log_semantic(f"[break] emitGoto a {target} y flujo marcado como terminado")
 
         # Marca terminación del flujo del bloque actual
         self.v.stmt_just_terminated = "break"
@@ -721,7 +721,7 @@ class ControlFlowAnalyzer:
         # TAC
         self.v.emitter.emitGoto(target)
         self.v.emitter.markFlowTerminated()
-        log_semantic(f"[continue] emitGoto a {target.getName()} y flujo marcado como terminado")
+        log_semantic(f"[continue] emitGoto a {target} y flujo marcado como terminado")
 
         # Marca terminación del flujo del bloque actual
         self.v.stmt_just_terminated = "continue"
