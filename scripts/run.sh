@@ -20,7 +20,4 @@ if [ ! -f "$INPUT_FILE" ]; then
   exit 1
 fi
 
-# Ejecutar el driver con PYTHONPATH ajustado
-echo -e "\nEjecutando con archivo: $INPUT_FILE"
-echo -e "Visitar http://172.20.112.1:5500/src/logs/out/ para abrir los archivos correspondientes\n" 
 PYTHONPATH=. python3 src/driver.py "$INPUT_FILE"

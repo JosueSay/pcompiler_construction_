@@ -75,6 +75,46 @@ class Emitter:
     def emitUnary(self, dst: str, op_text: str, value: str) -> None:
         self.emit(Op.UNARY, arg1=value, res=dst, label=op_text)
 
+    def emitNewList(self, dest_place: str, n_elems: int) -> None:
+        self.emit(Op.NEWLIST, n_elems, None, dest_place)
+
+    def emitLen(self, dest_place: str, arr_place: str):
+        """
+        Emite: dest_place = len arr_place
+        (Pseudo-op de TAC, no expone 'len' al lenguaje)
+        """
+        from ir.tac import Op
+        return self.emit(Op.LEN, arg1=arr_place, res=dest_place)
+
+    def emitBoundsCheck(self, idx_place: str, arr_place: str):
+        """
+        Patrón estándar de bounds check para a[i] o t_arr[i].
+        Emite:
+           t_len = len arr_place
+           if idx_place < 0 goto L_oob
+           if idx_place >= t_len goto L_oob
+           goto L_ok
+           L_oob: call __bounds_error, 0
+           L_ok:
+        Retorna: (t_len, L_ok)
+        """
+        from ir.tac import Op
+        t_len = self.temp_pool.newTemp("int")
+        self.emitLen(t_len, arr_place)
+
+        l_oob = self.newLabel("oob")
+        l_ok  = self.newLabel("ok")
+
+        self.emitIfGoto(f"{idx_place}<0", l_oob)
+        self.emitIfGoto(f"{idx_place}>={t_len}", l_oob)
+        self.emitGoto(l_ok)
+
+        self.emitLabel(l_oob)
+        self.emit(Op.CALL, arg1="__bounds_error", arg2="0")
+        self.emitLabel(l_ok)
+
+        return t_len, l_ok
+
     # ------------- RA helpers ----------------------
     
     def beginFunction(self, func_label: str, local_frame_size: int | None) -> None:

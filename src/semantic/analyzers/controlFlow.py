@@ -280,7 +280,7 @@ class ControlFlowAnalyzer:
         log_semantic(f"[controlFlow] visitCond sobre {expr_ctx} -> ltrue={ltrue}, lfalse={lfalse}")
         ctx_type = type(expr_ctx).__name__
 
-        # 1) Si el texto empieza con '!', intenta extraer el inner de forma robusta
+        # 1) Si el texto empieza con '!'
         txt = getattr(expr_ctx, "getText", lambda: "")()
         if txt.startswith("!"):
             inner = self.extractNotInner(expr_ctx)
