@@ -221,6 +221,7 @@ class ExpressionsAnalyzer:
                 line=ctx.start.line, column=ctx.start.column))
             return ErrorType()
 
+        # 1) Validar tipos de elementos
         elem_types = [self.v.visit(e) for e in expr_ctxs]
         if any(t is None for t in elem_types):
             return ErrorType()
@@ -248,9 +249,32 @@ class ExpressionsAnalyzer:
         except Exception:
             pass
 
-        self.setPlace(ctx, ctx.getText(), False)
-        log_semantic(f"visitArrayLiteral: Array literal -> place={ctx.getText()}, type={arr_t}")
+        # 2) EMISIÓN TAC para literal de lista
+        t_list = self.v.emitter.temp_pool.newTemp("ref")
+        n_elems = len(expr_ctxs)
+        self.v.emitter.emitNewList(t_list, n_elems)
+
+        for k, ek in enumerate(expr_ctxs):
+            # visitar el elemento con el visitor real
+            self.v.visit(ek)
+
+            # recuperar el place del elemento
+            elem_place = getattr(ek, "_place", None)
+            if elem_place is None:
+                try:
+                    elem_place = ek.getText()
+                except Exception:
+                    elem_place = "<undef>"
+
+            self.v.emitter.emit(Op.INDEX_STORE, arg1=t_list, res=elem_place, label=k)
+
+            # libera temporal del elemento si lo fue
+            self.freeIfTemp(ek, elem_types[k])
+
+        self.setPlace(ctx, t_list, True)
+        log_semantic(f"visitArrayLiteral: Array literal -> place={t_list}, type={arr_t}")
         return arr_t
+
 
     @log_function
     def visitThisExpr(self, ctx):

@@ -75,6 +75,10 @@ class Emitter:
     def emitUnary(self, dst: str, op_text: str, value: str) -> None:
         self.emit(Op.UNARY, arg1=value, res=dst, label=op_text)
 
+    def emitNewList(self, dest_place: str, n_elems: int) -> None:
+        self.emit(Op.NEWLIST, n_elems, None, dest_place)
+
+
     # ------------- RA helpers ----------------------
     
     def beginFunction(self, func_label: str, local_frame_size: int | None) -> None:
