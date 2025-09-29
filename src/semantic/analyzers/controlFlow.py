@@ -256,73 +256,62 @@ class ControlFlowAnalyzer:
         return exprs
     
     @log_function
+    def extractNotInner(self, node):
+        """Busca un UnaryExpr con '!' y devuelve su hijo interno."""
+        try:
+            # Caso directo: el propio nodo es UnaryExpr con '!'
+            if type(node).__name__ in ("UnaryExprContext","UnaryExpressionContext"):
+                if node.getChildCount() >= 2 and node.getChild(0).getText() == "!":
+                    return node.getChild(1)
+            # Búsqueda profunda
+            for ch in self.walk(node):
+                if type(ch).__name__ in ("UnaryExprContext","UnaryExpressionContext"):
+                    try:
+                        if ch.getChildCount() >= 2 and ch.getChild(0).getText() == "!":
+                            return ch.getChild(1)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        return None
+     
+    @log_function
     def visitCond(self, expr_ctx, ltrue: str, lfalse: str) -> None:
         log_semantic(f"[controlFlow] visitCond sobre {expr_ctx} -> ltrue={ltrue}, lfalse={lfalse}")
         ctx_type = type(expr_ctx).__name__
 
-        # --- Manejo robusto de '!' ---
-        if ctx_type in ("UnaryExprContext", "UnaryExpressionContext"):
-            op = getattr(expr_ctx, "op", None)
-            if op and maybe_call(op).text == "!":
-                inner = safe_attr(expr_ctx, "unaryExpr") or safe_attr(expr_ctx, "expression") or safe_attr(expr_ctx, "right")
-                log_semantic("[controlFlow] visitCond: operador '!' detectado (op presente)")
-                self.visitCond(inner, lfalse, ltrue)
-                return
-            # Caso extra: chequear hijos directos (ANTLR: '!' <expr>)
-            try:
-                if expr_ctx.getChildCount() >= 2 and expr_ctx.getChild(0).getText() == "!":
-                    inner = expr_ctx.getChild(1)
-                    log_semantic("[controlFlow] visitCond: operador '!' detectado (hijo directo)")
-                    self.visitCond(inner, lfalse, ltrue)
-                    return
-            except Exception:
-                pass
-
-        # Fallback textual (cuando llega algo raro con texto "!...")
-        try:
-            cond_txt = expr_ctx.getText()
-        except Exception:
-            cond_txt = ""
-        if cond_txt.startswith("!"):
-            inner = safe_attr(expr_ctx, "unaryExpr") or safe_attr(expr_ctx, "expression")
-            if inner is None:
-                try:
-                    inner = expr_ctx.getChild(1)  # después de '!' normalmente viene el inner
-                except Exception:
-                    inner = None
+        # 1) Si el texto empieza con '!', intenta extraer el inner de forma robusta
+        txt = getattr(expr_ctx, "getText", lambda: "")()
+        if txt.startswith("!"):
+            inner = self.extractNotInner(expr_ctx)
             if inner is not None:
-                log_semantic("[controlFlow] visitCond: fallback textual '!' → intercambio de etiquetas")
+                log_semantic("[controlFlow] visitCond: '!' detectado (walker) → intercambio de etiquetas")
                 self.visitCond(inner, lfalse, ltrue)
                 return
 
-        # --- B1 || B2 ---
-        if "LogicalOr" in ctx_type or getattr(expr_ctx, "op", None) and maybe_call(expr_ctx.op).text == "||":
-            left = safe_attr(expr_ctx, "left") or safe_attr(expr_ctx, "expression") or safe_attr(expr_ctx, "lhs")
+        # 2) OR
+        if "LogicalOr" in ctx_type or (getattr(expr_ctx, "op", None) and maybe_call(expr_ctx.op).text == "||"):
+            left  = safe_attr(expr_ctx, "left")  or safe_attr(expr_ctx, "expression")  or safe_attr(expr_ctx, "lhs")
             right = safe_attr(expr_ctx, "right") or safe_attr(expr_ctx, "expression1") or safe_attr(expr_ctx, "rhs")
             lmid = self.v.emitter.newLabel("Lor")
-            log_semantic("[controlFlow] visitCond: operador '||' detectado, creando label intermedio " + lmid)
-            self.visitCond(left, ltrue, lmid)
+            self.visitCond(left,  ltrue, lmid)
             self.v.emitter.emitLabel(lmid)
             self.visitCond(right, ltrue, lfalse)
             return
 
-        # --- B1 && B2 ---
-        if "LogicalAnd" in ctx_type or getattr(expr_ctx, "op", None) and maybe_call(expr_ctx.op).text == "&&":
-            left = safe_attr(expr_ctx, "left") or safe_attr(expr_ctx, "expression") or safe_attr(expr_ctx, "lhs")
+        # 3) AND
+        if "LogicalAnd" in ctx_type or (getattr(expr_ctx, "op", None) and maybe_call(expr_ctx.op).text == "&&"):
+            left  = safe_attr(expr_ctx, "left")  or safe_attr(expr_ctx, "expression")  or safe_attr(expr_ctx, "lhs")
             right = safe_attr(expr_ctx, "right") or safe_attr(expr_ctx, "expression1") or safe_attr(expr_ctx, "rhs")
             lmid = self.v.emitter.newLabel("Land")
-            log_semantic("[controlFlow] visitCond: operador '&&' detectado, creando label intermedio " + lmid)
-            self.visitCond(left, lmid, lfalse)
+            self.visitCond(left,  lmid,  lfalse)
             self.v.emitter.emitLabel(lmid)
             self.visitCond(right, ltrue, lfalse)
             return
 
-        # --- Relacionales/igualdad: emitir directo ---
-        cond_text = expr_ctx.getText()
-        log_semantic(f"[controlFlow] visitCond: expresión final -> emitIfGoto {cond_text} ? {ltrue} : {lfalse}")
-        self.v.emitter.emitIfGoto(cond_text, ltrue)
+        # 4) Relacionales/igualdad (caso base)
+        self.v.emitter.emitIfGoto(txt, ltrue)
         self.v.emitter.emitGoto(lfalse)
-
 
     # ---------- IF ----------
     @log_function
