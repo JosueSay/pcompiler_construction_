@@ -12,7 +12,7 @@ run_ts = None
 semantic_log_path = None
 run_out_dir = None 
 lock = threading.Lock()
-VERBOSE = os.environ.get("CPS_VERBOSE", "1") not in ("0", "false", "False")
+VERBOSE = os.environ.get("CPS_VERBOSE", "0").lower() not in ("0", "false")
 
 def log_function(func):
     """Decorador para loguear entrada y salida de funciones."""
@@ -36,8 +36,7 @@ def start_run(output_stem: str):
         run_out_dir = os.path.join(OUT_DIR, output_stem)
         os.makedirs(run_out_dir, exist_ok=True)
 
-        # semantic.log con nombre simple
-        semantic_log_path = os.path.join(run_out_dir, "semantic.log")
+        semantic_log_path = os.path.join(run_out_dir, "workflow.log")
         with open(semantic_log_path, "a", encoding="utf-8") as f:
             f.write("\n" + "="*60 + "\n")
             f.write(f"New semantic analysis run: {run_ts}\n")
@@ -49,7 +48,7 @@ def log_semantic(message: str, *, force: bool = False):
     """
     if not semantic_log_path:
         # Fallback legacy si alguien llama sin start_run
-        legacy = os.path.join(BASE_DIR, "semantic.log")
+        legacy = os.path.join(BASE_DIR, "workflow.log")
         with open(legacy, "a", encoding="utf-8") as f:
             f.write(message + "\n")
         return

@@ -14,8 +14,17 @@ def outputStem(src_path: str) -> str:
     return f"{ts}_{base}"
 
 def main(argv: list[str]) -> None:
+    # Colores
+    RED     = "\033[91m"
+    GREEN   = "\033[92m"
+    YELLOW  = "\033[93m"
+    CYAN    = "\033[96m"
+    MAGENTA = "\033[95m"
+    RESET   = "\033[0m"
+    BOLD    = "\033[1m"
+
     if len(argv) < 2:
-        print("Usage: driver.py <file.cps>")
+        print(f"{YELLOW}Usage:{RESET} driver.py <file.cps>")
         return
 
     src: str = argv[1]
@@ -26,6 +35,9 @@ def main(argv: list[str]) -> None:
     lexer: CompiscriptLexer = CompiscriptLexer(input_stream)
     tokens: CommonTokenStream = CommonTokenStream(lexer)
     parser: CompiscriptParser = CompiscriptParser(tokens)
+
+    print(f"{CYAN}{'='*60*2}{RESET}")
+    print(f"{MAGENTA}Ejecutando con archivo:{RESET} {BOLD}{src}{RESET}")
 
     t0: float = time.perf_counter()
     tree = parser.program()
@@ -47,14 +59,17 @@ def main(argv: list[str]) -> None:
     log_semantic(f"[TAC] escrito: {tac_txt}", force=True)
     log_semantic(f"[TAC] escrito: {tac_html}", force=True)
 
+    # Errores
     if getattr(visitor, "errors", None):
+        print(f"{RED}{BOLD}Errores semánticos:{RESET}")
         for e in visitor.errors:
-            print(f" - {e}")
+            print(f"{RED}\t- {e}{RESET}")
 
-    print(f"Tiempo total: {(t1 - t0):.3f}s")
-    print(f"OUT DIR: {out_dir}")
-    print(f"TAC: {tac_txt}")
-    print(f"TAC HTML: {tac_html}")
+    # Mensajes finales
+    print(f"{GREEN}{BOLD}Tiempo total:{RESET} {t1 - t0:.3f}s")
+    print(f"{CYAN}{BOLD}OUT DIR:{RESET} {out_dir}")
+    print(f"{CYAN}{'='*60*2}{RESET}")
 
+    
 if __name__ == "__main__":
     main(sys.argv)
