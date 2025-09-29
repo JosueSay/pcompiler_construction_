@@ -251,7 +251,24 @@ class StatementsAnalyzer:
     def handleSimpleIndexStore(self, base_name, idx_node, rhs_node, ctx_stmt):
         log_semantic(f"handleSimpleIndexStore -> inicio: {base_name}[{idx_node.getText()}] = {rhs_node.getText()}")
 
-        # usar la expresión interna del índice si existe
+        # 0) variable debe existir y no ser const
+        sym = self.v.scopeManager.lookup(base_name)
+        if sym is None:
+            self.v.appendErr(SemanticError(
+                f"Uso de variable no declarada: '{base_name}'",
+                line=ctx_stmt.start.line, column=ctx_stmt.start.column))
+            log_semantic(f"[INDEX_STORE] ERROR: variable no declarada '{base_name}'")
+            return
+        if getattr(sym, "category", None) == SymbolCategory.CONSTANT:
+            self.v.appendErr(SemanticError(
+                f"No se puede modificar la constante '{base_name}'.",
+                line=ctx_stmt.start.line, column=ctx_stmt.start.column))
+            log_semantic(f"[INDEX_STORE] ERROR: intento de modificar constante '{base_name}'")
+            return
+
+        arr_t = getattr(sym, "type", None)
+
+        # 1) normaliza la expresión del índice
         try:
             idx_expr = idx_node.expression()
         except Exception:
@@ -259,24 +276,50 @@ class StatementsAnalyzer:
         if idx_expr is None:
             idx_expr = idx_node
 
-        sym = self.v.scopeManager.lookup(base_name)
-        if sym is None:
-            log_semantic(f"handleSimpleIndexStore -> ERROR variable no declarada: {base_name}")
-            return
-
-        arr_t = sym.type
+        # 2) visita de tipos (no debe emitir stores todavía)
         idx_t = self.v.visit(idx_expr)
         rhs_t = self.v.visit(rhs_node)
-        log_semantic(f"handleSimpleIndexStore -> tipos -> arr:{arr_t}, idx:{idx_t}, rhs:{rhs_t}")
 
+        # 3) validaciones de tipos
+        if not isinstance(arr_t, ArrayType):
+            self.v.appendErr(SemanticError(
+                f"Asig. indexada sobre un no-arreglo: '{arr_t}'.",
+                line=ctx_stmt.start.line, column=ctx_stmt.start.column))
+            log_semantic(f"[INDEX_STORE] ERROR: no es un arreglo '{arr_t}'")
+            return
+
+        if not isinstance(idx_t, IntegerType):
+            self.v.appendErr(SemanticError(
+                f"Índice no entero en asig. de arreglo: se encontró {idx_t}.",
+                line=ctx_stmt.start.line, column=ctx_stmt.start.column))
+            log_semantic(f"[INDEX_STORE] ERROR: índice no entero '{idx_t}'")
+            return
+
+        elem_t = arr_t.elem_type
+        if rhs_t is None or isinstance(rhs_t, ErrorType) or not isAssignable(elem_t, rhs_t):
+            self.v.appendErr(SemanticError(
+                f"Asignación incompatible: no se puede asignar {rhs_t} a {elem_t} en {base_name}[i].",
+                line=ctx_stmt.start.line, column=ctx_stmt.start.column))
+            log_semantic(f"[INDEX_STORE] ERROR: tipos incompatibles rhs:{rhs_t} elem:{elem_t}")
+            return
+
+        # 4) obtener places y emitir INDEX_STORE
         p_idx, it_idx = self.v.exprs.deepPlace(idx_expr)
         idx_place = p_idx or idx_expr.getText()
         p_rhs, it_rhs = self.v.exprs.deepPlace(rhs_node)
         rhs_place = p_rhs or rhs_node.getText()
-        log_semantic(f"handleSimpleIndexStore -> deepPlace -> idx='{idx_place}', rhs='{rhs_place}'")
+        log_semantic(f"[INDEX_STORE] tipos -> arr:{arr_t}, idx:{idx_t}, rhs:{rhs_t}")
+        log_semantic(f"[INDEX_STORE] deepPlace -> idx='{idx_place}', rhs='{rhs_place}'")
 
         self.v.emitter.emit(Op.INDEX_STORE, arg1=base_name, res=rhs_place, label=idx_place)
-        log_semantic(f"handleSimpleIndexStore -> emitido: {base_name}[{idx_place}] = {rhs_place}")
+        log_semantic(f"[INDEX_STORE] emitido: {base_name}[{idx_place}] = {rhs_place}")
+
+        # 5) liberar temporales usados en idx/rhs si aplica
+        if it_idx:
+            self.v.emitter.temp_pool.free(idx_place, "*")
+        if it_rhs:
+            self.v.emitter.temp_pool.free(rhs_place, "*")
+
 
 
     # ------------------------------------------------------------------
