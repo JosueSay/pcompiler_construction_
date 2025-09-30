@@ -1,365 +1,301 @@
-# Generación de TAC para Expresiones en Compiscript
+# Generación de TAC para Expresiones
 
-Este documento describió el diseño de **generación de Código de Tres Direcciones (TAC, Three-Address Code)** para **expresiones** del lenguaje Compiscript. Se explicó cómo se tradujo cada categoría de expresión al 3AC textual y a cuádruplos, cómo se administraron **temporales** y **etiquetas**, y por qué se eligieron dichas decisiones.
+Este documento describe **cómo está implementada** la generación de **Three-Address Code (TAC/3AC)** para **expresiones** en Compiscript: reglas efectivas de traducción, manejo de temporales y etiquetas, y particularidades confirmadas por la batería de pruebas (incluyendo acceso indexado, propiedades encadenadas, corto-circuito y `this`/métodos/closures).
 
-## 1. Alcance y convenciones
+## 1. Alcance y convenciones efectivas
 
-Se generó TAC en **dos representaciones**:
+* **Doble representación**:
 
-- **3AC textual**: archivo `.tac` con instrucciones lineales y etiquetas (`Lk:`).
-- **Cuádruplos**: tuplas en memoria `(op, arg1, arg2, res)` para testing y futuras optimizaciones.
+  * **3AC textual** (archivo `.tac`) con etiquetas (`Lk:`), útil para “golden tests”.
+  * **Cuádruplos** en memoria: `(op, arg1, arg2, res, label?)`.
+* Cada visita de expresión retorna `ExprRes = { type, place, is_temp }`.
+* **Emisión in situ** durante la visita semántica; no hay segunda pasada.
+* **Temporales**:
 
-Se definió que cada visita de expresión devolviera un registro `ExprRes = { type, place, is_temp }`, donde `place ∈ { Id, Const, t_i }`. Las instrucciones se **emitieron in situ** mediante un `Emitter` compartido.
+  * Pools por tipo; **liberación post-orden** al emitir el padre, salvo que el valor suba como `place`.
+  * **Reset al final de cada sentencia** (observado en los tests: no hay fugas entre statements).
+* **Etiquetas**:
 
-**Temporales.** Se modeló un **pool por tipo** para reciclaje: `newtemp(T)` obtenía o creaba un temporal; la **liberación** se realizó en **post-orden** al emitir la operación del padre, salvo que el valor subiera como `place` de la expresión padre. Se reinicializó el pool al final de cada **sentencia**.
+  * Se usan para control y corto-circuito.
+  * Esquemas canónicos: `Lstart/Lbody/Lstep/Lend` en bucles, `Lthen/Lelse/Lend` en condicionales.
+* **Convenciones extra confirmadas**:
 
-**Etiquetas.** Se utilizaron etiquetas simbólicas `Lk` para condiciones y control de flujo (corto-circuito), evitando temporales booleanos innecesarios.
+  * `enter f_label, frame_size` al inicio de funciones/métodos.
+  * `param …` + `call f, n` / `t = call f, n`; `return`/`return v`.
 
-**Razonamiento de diseño.** Cuádruplos y 3AC textual facilitaron trazabilidad y pruebas; el reciclaje local de temporales redujo presión de registros sin exigir análisis de vida global en esta etapa. El uso de etiquetas para booleanos consolidó las reglas de *short-circuit* recomendadas en diseños tipo DDS.
+## 2. Aritméticas `+ - * /` y unaria `-`
 
-## 2. Operaciones aritméticas: `+`, `-`, `*`, `/`
-
-### Traducción
-
-Se tradujo una operación binaria `E = E1 op E2` como:
-
-1. `L <- visit(E1)`, `R <- visit(E2)`
-2. `T <- newtemp(type(E1 op E2))`
-3. `emit(T = L.place op R.place)`
-4. Liberación de `L` y `R` si fueron temporales
-5. Devolución de `ExprRes{ type, T, True }`
-
-Para unaria `-E`:
-
-1. `X <- visit(E)`
-2. `T <- newtemp(type(-, E))`
-3. `emit(T = - X.place)`
-4. Liberación de `X` si temporal
-5. Devolución de `ExprRes{ type, T, True }`
-
-### Ejemplo
-
-Código fuente:
-
-```c
-z = (a + b) * (c - d);
-```
-
-3AC resultante:
+### Regla práctica
 
 ```bash
+L = visit(E1); R = visit(E2)
+T = newtemp(type(E1 op E2))
+emit(T = L.place op R.place)
+freeIfTemp(L); freeIfTemp(R)
+return {type, T, is_temp=True}
+```
+
+### Ejemplo real
+
+```text
 t1 = a + b
 t2 = c - d
 t3 = t1 * t2
 z  = t3
 ```
 
-**Justificación.** Se separó en temporales para mantener tres direcciones por instrucción y permitir reciclaje local; el tipo del resultado se obtuvo con las reglas de `type_system.py` (p. ej., promoción numérica).
+**Notas**:
 
-## 3. Operaciones lógicas: `&&`, `||`, `!`
+* Tipado por `type_system`.
+* El backend podrá fusionar/copiar; la fase actual prioriza claridad 3AC.
 
-Se implementó **corto-circuito** mediante etiquetas, sin materializar temporales booleanos salvo que el contexto exigiera un valor (p. ej., asignación de `bool`). Para `!E` se generó una evaluación directa mediante inversión de saltos o mediante asignación a `0/1` cuando se requirió como valor.
+## 3. Relacionales y booleanos con corto-circuito `&& || !`
 
-### Traducción (esquemas)
+### Contexto de **control** (preferido)
 
-- `B -> B1 || B2`
-
-  ```bash
-  B1.true = B.true
-  B1.false = Lmid
-  B2.true = B.true
-  B2.false = B.false
-  B.code = B1.code || (Lmid:) || B2.code
-  ```
-
-- `B -> B1 && B2`
-
-  ```bash
-  B1.true = Lmid
-  B1.false = B.false
-  B2.true = B.true
-  B2.false = B.false
-  B.code = B1.code || (Lmid:) || B2.code
-  ```
-
-- `B -> E1 rel E2`
-
-  ```bash
-  if E1 rel E2 goto B.true
-  goto B.false
-  ```
-
-### Diagrama – patrón `if (B) S1 else S2`
-
-```mermaid
-flowchart TD
-    A[Evaluar B] -->|true| T["emit label(B.true)<br>S1"]
-    A -->|false| F["emit label(B.false)<br>S2"]
-    T --> J[goto Lend]
-    F --> J
-    J --> Lend(["label Lend"])
-```
-
-### Ejemplo
-
-Código fuente:
-
-```c
-if (x < 100 || x > 200 && x != y) x = 0;
-```
-
-3AC resultante:
+No se materializa `bool` intermedio: se emiten **saltos**.
 
 ```bash
-if x < 100 goto Lthen
-ifFalse x > 200 goto Lend
-ifFalse x != y goto Lend
-Lthen: x = 0
-Lend:
+if E1 rel E2 goto Ltrue
+goto Lfalse
 ```
 
-**Justificación.** El uso de etiquetas evitó temporales booleanos y respetó la semántica de **corto-circuito**; cuando la expresión lógica se utilizó como valor, se generó `t = 0/1` con saltos de relleno. Este patrón se derivó de reglas canónicas DDS (Aho et al., cap. 6; `docs/README_TAC_GENERATION.md`).
+`||` y `&&` siguen reglas DDS con etiqueta intermedia:
 
-## 4. Comparaciones: `==`, `!=`, `<`, `<=`, `>`, `>=`
-
-Se distinguieron dos contextos:
-
-- **Contexto de control** (en condicionales y bucles):
+* `B = B1 || B2`
 
   ```bash
-  if E1 rel E2 goto Ltrue
-  goto Lfalse
+  B1.true = Ltrue; B1.false = Lmid
+  B2.true = Ltrue; B2.false = Lfalse
+  code: B1; Lmid: B2
   ```
 
-- **Contexto de valor** (asignación a un `bool`):
+* `B = B1 && B2`
 
   ```bash
-  t = (E1 rel E2)   ; t ∈ {0,1}
+  B1.true = Lmid; B1.false = Lfalse
+  B2.true = Ltrue; B2.false = Lfalse
+  code: B1; Lmid: B2
   ```
 
-**Ejemplo (valor):**
+### Contexto de **valor** (cuando debe producir 0/1)
 
-```c
-b = (a < c);
+Se materializa un temporal booleano con asignaciones condicionadas (patrón “relleno”).
+
+### Ejemplo real (if con corto-circuito)
+
+```text
+if x<3||y>7&&x!=y goto Lthen1
+goto Lelse3
+...
 ```
+
+## 4. Asignación simple `x = expr`
 
 ```bash
-t1 = a < c
-b  = t1
+R = visit(expr)
+emit(x = R.place)
+freeIfTemp(R)
 ```
 
-**Justificación.** Esta separación minimizó instrucciones y mantuvo expresividad: saltos en control; 0/1 cuando fue estrictamente necesario (Aho et al., cap. 6).
+Ejemplo:
 
-## 5. Asignaciones: `x = expr`
-
-Se tradujo como:
-
-1. `R <- visit(expr)`
-2. `emit(x = R.place)`
-3. Liberación de `R` si temporal
-
-**Ejemplo:**
-
-```c
-x = a + b;
+```text
+t1 = y + 2
+o.x = t1    ; si LHS es propiedad, ver §7
 ```
 
-```bash
-t1 = a + b
-x  = t1
+## 5. Lectura/Escritura indexada `x = a[i]` / `a[i] = x`
+
+**Invariante:** siempre hay *bounds check* **antes** de cualquier `INDEX_LOAD/STORE` (incluyendo índices en temporales y literales).
+
+### Patrón real (lectura)
+
+```text
+t3 = len a
+if i<0  goto oob1
+if i>=t3 goto oob1
+goto ok2
+oob1:  call __bounds_error, 0
+ok2:   t2 = a[i]
+x = t2
 ```
 
-**Justificación.** Se preservó la forma 3AC canónica y se permitió al back-end aplicar copia/coalescencia si procede.
+### Patrón real (escritura)
 
-## 6. Inicialización de constantes (`const`)
-
-Se exigió inicializador semánticamente. En TAC se emitió una única asignación al **símbolo constante** en su punto de declaración:
-
-```c
-const k: int = a + 1;
+```text
+t3 = len a
+if i<0  goto oob1
+if i>=t3 goto oob1
+goto ok2
+oob1:  call __bounds_error, 0
+ok2:   a[i] = v
 ```
 
-```bash
-t1 = a + 1
-k  = t1
+**Notas**:
+
+* El temporal de `len` se **libera** tras el acceso.
+* En secuencias lectura→escritura se repite el check (hoisting diferido a futuras optimizaciones).
+
+## 6. Acceso a propiedad `obj.f` y cadenas `a.b.c`
+
+* **Lectura**: `FIELD_LOAD` a un temporal (`t = obj.f`).
+* **Escritura**: `FIELD_STORE` (`obj.f = v`).
+* **Cadenas**: `FIELD_LOAD` en cascada hasta obtener el lugar del arreglo/valor final.
+
+### Propiedad + índice (dos caminos cubiertos)
+
+1. **this.prop[i] = v** (método):
+
+```text
+t1 = this.data
+t2 = len t1
+...
+t1[i] = v
 ```
 
-**Justificación.** La semántica ya aseguró inmutabilidad; el TAC necesitó solamente materializar el valor. No se emitieron guardas adicionales en esta fase (véase `src/semantic/analyzers/statements.py` y `docs/README_TAC_GENERATION.md`).
+2. **a.b.c[i] = v** (encadenado):
 
-## 7. Indexadas y listas: `x = a[i]`, `a[i] = x`
-
-Se definieron instrucciones indexadas 3AC:
-
-- **Lectura indexada:**
-
-  ```bash
-  t1 = a[i]
-  x  = t1
-  ```
-
-- **Escritura indexada:**
-
-  ```bash
-  a[i] = x
-  ```
-
-**Ejemplo:**
-
-```c
-x = v[i + 1];
-v[j] = x * 2;
+```text
+t2 = a.b
+t3 = t2.c
+t4 = len t3
+...
+t3[1] = 3
 ```
 
-```bash
-t1 = i + 1
-t2 = v[t1]
-x  = t2
-t3 = x * 2
-v[j] = t3
-```
+**Metadatos**: cuando aplica, los `FIELD_*` llevan `_field_owner/_field_offset` desde `ClassHandler`.
+**Const-safety**: no se permite modificar constantes ni realizar “store” a través de una base `const`.
 
-**Justificación.** Se mantuvo la forma abstracta `a[i]` sin expandir a aritmética de direcciones, ya que el modelo de 3AC puede delegar dicha expansión al back-end. Las validaciones semánticas de rango estático por literales (si existieron) no alteraron la traducción (véase `src/semantic/analyzers/lvalues.py` y `expressions.py`).
+## 7. `this` en métodos
 
-## 8. Acceso a propiedades: `obj.f`, `obj.f = v`
+`this` está disponible como identificador **sólo** dentro de métodos; fuera de clase → error semántico y no se emite store.
+Patrón típico (visto en getters/setters e incrementos):
 
-Se trató `obj.f` como un **l-value** con desplazamiento calculado por `field_offsets`. En 3AC se mantuvo el acceso abstracto:
-
-- **Lectura:**
-
-  ```bash
-  t1 = obj.f
-  x  = t1
-  ```
-
-- **Escritura:**
-
-  ```bash
-  obj.f = v
-  ```
-
-**Ejemplo:**
-
-```c
-y = p.x + 1;
-p.x = y;
-```
-
-```bash
-t1 = p.x
+```text
+t1 = this.x
 t2 = t1 + 1
-y  = t2
-p.x = y
-```
-
-**Justificación.** El detalle de offset de campo se resolvió en la tabla de símbolos/clase (`field_offsets`). Se preservó la abstracción en 3AC para no acoplar el IR a un layout concreto; el back-end podrá expandir a direccionamiento base+desplazamiento.
-
-## 9. Uso de `this` en métodos
-
-Se modeló `this` como **parámetro implícito** de métodos, consistente con la semántica de `src/semantic/analyzers/classes.py` y con el registro de métodos (`registry/method_registry.py`). En TAC, `this` se comportó como un identificador disponible en el marco de activación del método:
-
-```c
-this.x = this.x + 1;
-```
-
-```bash
-t1   = this.x
-t2   = t1 + 1
 this.x = t2
 ```
 
-**Justificación.** Este enfoque alineó llamadas de método con la convención `param this; param arg1; ...; call Class.method, n`, simplificando resolución y RA.
+## 8. Constantes (`const`)
 
-## 10. Conversión / cast (si aplica)
-
-La gramática de Compiscript no definió un operador explícito de *cast*; sin perjuicio de ello, se previó una política de **promoción implícita segura** cuando las reglas de tipos lo exigieron (p. ej., `int + float -> float`). En caso de requerirse materialización, se acordó utilizar pseudo-operaciones de conversión, por ejemplo:
-
-- **Ampliación numérica:**
-
-  ```bash
-  t = i2f x
-  ```
-
-- **Conversión a booleano (cuando fue necesario producir un valor 0/1):**
-
-  ```bash
-  t = (E1 rel E2)
-  ```
-
-**Justificación.** Se evitó introducir *casts* arbitrarios sin soporte en la gramática y se limitó la conversión a lo necesario por las reglas de tipos (`src/semantic/type_system.py`). Cualquier conversión no segura quedaría rechazada en semántica.
-
-## 11. Pseudocódigo de esquemas de traducción
-
-### 11.1 Binaria aritmética
+Se exige inicializador en semántica. En TAC:
 
 ```text
-function visitBinary(E1, op, E2):
-    L = visit(E1)
-    R = visit(E2)
-    T = newtemp(resultType(E1, op, E2))
-    emit(T = L.place op R.place)
-    freeIfTemp(L); freeIfTemp(R)
-    return { type: T.type, place: T, is_temp: true }
+t1 = expr
+K  = t1
 ```
 
-### 11.2 Relacional en contexto de control
+Luego, cualquier intento de asignar a `K` o de usar `K[...] =` es error (detectado en semántica).
+
+## 9. Closures (cuando hay funciones anidadas con captura)
+
+Patrón efectivo:
 
 ```text
-function emitRelCond(E1, rel, E2, Ltrue, Lfalse):
-    L = visit(E1); R = visit(E2)
-    emit(if L.place rel R.place goto Ltrue)
-    emit(goto Lfalse)
-    freeIfTemp(L); freeIfTemp(R)
+f_add:
+enter f_add, N
+t1 = base + n
+return t1
+
+t_env = mkenv base
+t_clo = mkclos f_add, t_env
+param 5
+t1 = callc t_clo, 1
 ```
 
-### 11.3 Corto-circuito `||`
+* `mkenv` empaqueta capturas, `mkclos` crea el cierre, `callc` invoca con entorno.
+
+## 10. Pseudocódigo de los esquemas usados
+
+### Binaria aritmética
 
 ```text
-function visitOr(B1, B2, Ltrue, Lfalse):
-    Lmid = newlabel()
-    visitCond(B1, Ltrue, Lmid)
-    emitLabel(Lmid)
-    visitCond(B2, Ltrue, Lfalse)
+visitBinary(E1, op, E2):
+  L = visit(E1)
+  R = visit(E2)
+  T = newtemp(type(E1 op E2))
+  emit(T = L.place op R.place)
+  freeIfTemp(L); freeIfTemp(R)
+  return {type: T.type, place: T, is_temp: true}
 ```
 
-**Referencias:** `docs/README_TAC_GENERATION.md`, Aho, Sethi, Ullman (cap. 6–7).
+### Relacional en control
 
-## 12. Ejemplos integrados
-
-### 12.1 Combinación aritmética y acceso a propiedad
-
-```c
-q = (p.x + a[i]) / 2;
+```text
+emitRelCond(E1, rel, E2, Ltrue, Lfalse):
+  L = visit(E1); R = visit(E2)
+  emit(if L.place rel R.place goto Ltrue)
+  emit(goto Lfalse)
+  freeIfTemp(L); freeIfTemp(R)
 ```
 
-```bash
-t1 = p.x
-t2 = a[i]
-t3 = t1 + t2
-t4 = t3 / 2
-q  = t4
+### Indexada segura (plantilla)
+
+```text
+emitBoundsCheck(i, a):
+  t_len = len a
+  if i<0  goto L_oob
+  if i>=t_len goto L_oob
+  goto L_ok
+L_oob: call __bounds_error, 0
+L_ok:  return t_len
 ```
 
-### 12.2 Lógica con corto-circuito y asignación
+## 11. Consideraciones de tipado/validación que afectan al TAC
 
-```c
-b = (x < 0) || (x > 10 && y != 0);
+* **Índice debe ser entero**: si no, se reporta error y no se emite `INDEX_*`.
+* **Compatibilidad de tipos** en escritura: `elem_type := rhs_type` debe ser válida; si no, error.
+* **Uso de `this`**: sólo en métodos.
+* **Propiedad válida**: `obj.f` debe existir y su tipo debe ser consistente (arreglo si hay indexación).
+* **Dead code**: tras `return`, el bloque siguiente se marca inalcanzable y no se emite TAC útil.
+
+## 12. Ejemplos integrados (extraídos de casos reales)
+
+### Lectura y escritura con corto-circuito alrededor
+
+```text
+t3 = len v
+if i<0 goto oob1
+if i>=t3 goto oob1
+goto ok2
+oob1: call __bounds_error, 0
+ok2: t2 = v[i]
+r = t2
+t4 = r + 4
+t5 = len v
+if i<0 goto oob3
+if i>=t5 goto oob3
+goto ok4
+oob3: call __bounds_error, 0
+ok4: v[i] = t4
 ```
 
-Como valor booleano (0/1) se materializó mediante saltos y relleno:
+### Método con acceso a arreglo de instancia
 
-```bash
-# versión compacta: evaluar a 0/1
-tB = 0
-if x < 0 goto Ltrue
-ifFalse x > 10 goto Lend
-ifFalse y != 0 goto Lend
-Ltrue: tB = 1
-Lend:
-b = tB
+```text
+f_Box_get:
+enter f_Box_get, 12
+t1 = this.data
+t3 = len t1
+if i<0 goto oob1
+if i>=t3 goto oob1
+goto ok2
+oob1: call __bounds_error, 0
+ok2: t2 = t1[i]
+return t2
 ```
 
-**Justificación.** Se respetó el corto-circuito y se produjo un único temporal booleano cuando la expresión se asignó a una variable.
+### Cadenas de propiedad + índice
 
-## 13. Consideraciones de validación estática
-
-Las validaciones semánticas (tipos compatibles, índice entero, rango estático cuando el literal de arreglo lo permitió, acceso a propiedad válido, uso legal de `this`) se ejecutaron en `src/semantic/`. Dichas validaciones no alteraron el patrón de TAC salvo para prevenir su emisión en presencia de errores (registro de diagnóstico y recuperación cuando fue posible).
+```text
+t2 = a.b
+t3 = t2.c
+t4 = len t3
+if 1<0 goto oob1
+if 1>=t4 goto oob1
+goto ok2
+oob1: call __bounds_error, 0
+ok2: t3[1] = 3
+```

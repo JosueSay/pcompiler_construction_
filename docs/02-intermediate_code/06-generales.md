@@ -1,33 +1,23 @@
-# Generación de TAC para Reglas Generales en Compiscript
+# Generación de TAC para Reglas Generales
 
-Este documento describió el diseño de **generación de Código de Tres Direcciones (TAC, Three-Address Code)** para las **reglas generales** del lenguaje Compiscript. Se explicó cómo se reflejaron en TAC la **detección de código muerto**, la **validación semántica previa** de expresiones, el **manejo de declaraciones duplicadas**, y las **estrategias de temporales, etiquetas y control de flujo** que sustentaron estos casos.
+Este documento explica cómo se reflejan en el **Three-Address Code (TAC/3AC)** las **reglas generales** de Compiscript: detección de **código muerto**, relación con la **validación semántica previa**, manejo de **declaraciones duplicadas** y las estrategias de **temporales, etiquetas y control de flujo** que sostienen estos comportamientos.
 
-## 1. Detección de código muerto y reflejo en TAC
+## 1. Detección de código muerto y su reflejo en TAC
 
-### 1.1 Señales semánticas de terminación
+### 1.1 Señales de terminación desde semántica
 
-El análisis semántico marcó terminación de flujo para:
+El análisis semántico marca fin de flujo cuando aparece, por ejemplo, un `return`. Esa señal se propaga al emisor como **barrera**: desde ese punto, **no se emite** TAC adicional dentro del mismo bloque léxico.
 
-- `return` (en `analyzers/returns.py`),
-- `break`/`continue` fuera del contexto permitido (error),
-- y, dentro de `statements.py`/`controlFlow.py`, la variable interna de estado indicó que un **statement acabó el flujo** del bloque (por ejemplo, un `return` en medio de un bloque).
+### 1.2 Política en regiones muertas
 
-Estas señales se propagaron al emisor TAC como **barreras de emisión**: a partir del punto en que el flujo se consideró terminado, **no se emitieron** cuádruplos adicionales dentro del mismo bloque léxico.
+* En regiones muertas se **suprime** la creación de temporales, etiquetas e instrucciones.
+* Solo se permiten las **etiquetas de cierre** necesarias (si ya estaban reservadas) para mantener un 3AC bien formado.
 
-### 1.2 Política de emisión en regiones muertas
+**Motivo**: reflejar fielmente la inalcanzabilidad y evitar inconsistencias en el IR.
 
-- En regiones marcadas como **muertas** se suprimió la generación de:
+### 1.3 Ejemplo — muerto tras `return`
 
-  - nuevos **temporales**,
-  - nuevas **etiquetas**,
-  - y nuevas **instrucciones**.
-- Se permitió, no obstante, cerrar estructuras ya abiertas (p. ej., emitir la **etiqueta** de salida de un `if-else` o de un bucle si había sido reservada antes del punto de terminación), para mantener el **3AC textual** bien formado.
-
-**Justificación.** Conservar la integridad del flujo a nivel de etiquetas evitó inconsistencias en el **3AC textual** y en los cuádruplos, al tiempo que reflejó fielmente la **semántica de inalcanzabilidad**.
-
-### 1.3 Ejemplo — código muerto tras `return`
-
-Código:
+Fuente:
 
 ```c
 function f(a: int): int {
@@ -42,14 +32,12 @@ TAC:
 f_f:
 enter f_f, <frame>
 return a
-; no se emitió ninguna instrucción para "a = a + 1"
+; sin emisión para "a = a + 1"
 ```
 
-El caso se correspondió con `src/test/generales/error_codigo_muerto_return.cps` en el ámbito de pruebas.
+### 1.4 Ejemplo — muerto tras `break`
 
-### 1.4 Ejemplo — código muerto tras `break`
-
-Código:
+Fuente:
 
 ```c
 while (true) {
@@ -69,175 +57,142 @@ Lbody:
 Lend:
 ```
 
-No se emitió `x = 1`.
+## 2. Validación semántica previa y garantía en TAC
 
-## 2. Validación de expresiones semánticamente válidas y garantía en TAC
+### 2.1 Semántica valida, TAC asume
 
-### 2.1 Validación en semántica, supresión en TAC
+La tipificación y los usos válidos de expresiones/lvalues se comprueban en **semántica**. Si hay error:
 
-La verificación de expresiones bien tipadas se realizó en **semántica** (`expressions.py`, `lvalues.py`, `type_system.py`). Por ejemplo, no se permitió multiplicar **funciones** o aplicar operadores a **referencias no compatibles**. Cuando se detectó un error:
-
-- **no se materializó** el `place` de la expresión,
-- el **emisor TAC** recibió un valor vacío/erróneo y **suprimió** la emisión de la instrucción, registrándose el diagnóstico en `diagnostics.py`.
-
-**Justificación.** La fase TAC asumió una **entrada tipada**. Evitar emisiones parciales impidió cuádruplos inconsistentes (p. ej., `t = f * 2` donde `f` es una función).
+* No se materializa un `place`.
+* El emisor **no** genera la instrucción de esa expresión.
+* Se conserva el resto del bloque válido.
 
 ### 2.2 Ejemplo — expresión inválida (no emisión)
 
-Código:
+Fuente:
 
 ```c
 function g(): void {}
-let x = g * 2; // inválido: "g" es una función
+let x = g * 2; // inválido si 'g' no es valor numérico
 ```
 
 TAC (fragmento):
 
 ```bash
-; no se emitió "t = g * 2" por error semántico
-; el resto del bloque, si fue válido, sí se emitió
+; sin "t = g * 2"
+; el resto del bloque válido sí se emite
 ```
 
-La **consistencia** del bloque se mantuvo; el diagnóstico quedó en logs y el 3AC permaneció ejecutable para las partes válidas.
+## 3. Declaraciones duplicadas y tabla de símbolos
 
-## 3. Declaraciones duplicadas y consistencia de la tabla de símbolos
+### 3.1 Duplicados en el mismo scope
 
-### 3.1 Rechazo de duplicados en el mismo scope
+Los duplicados se **rechazan**. Consecuencias:
 
-`symbol_table.py` y `scope_manager.py` rechazaron **declaraciones duplicadas** en el mismo ámbito (variables o parámetros). En ese caso:
+* No hay reserva duplicada.
+* No hay inicialización redundante.
+* Se mantiene el símbolo previamente válido.
 
-- El emisor **no** reservó espacio duplicado,
-- No se emitieron inicializaciones redundantes,
-- Se conservó el símbolo **previo** como el único válido del scope.
-
-### 3.2 Sombras (shadowing) en scopes internos
-
-Se permitió **shadowing** en scopes internos, produciendo **símbolos distintos** con `storage` y `offset` propios. El emisor TAC:
-
-- Usó el **símbolo resuelto** por el `scope_manager` para cada **l-value**,
-- Empleó direcciones lógicas consistentes (global/stack/param + offset) según los campos del símbolo.
-
-**Justificación.** Al respetar las reglas de la tabla de símbolos, el TAC no introdujo ambigüedades ni "dobles escrituras" y mantuvo el **mapeo 1:1** entre nombre visible y **ubicación**.
-
-### 3.3 Ejemplo — duplicado en mismo scope (no emisión de segunda reserva)
-
-Código:
+Ejemplo:
 
 ```c
 let a: int = 1;
-let a: int = 2; // duplicado, error
+let a: int = 2; // duplicado
 ```
 
 TAC:
 
 ```bash
 a = 1
-; no se emitió "a = 2" ni reserva nueva para "a"
+; sin "a = 2" ni reservas extra
 ```
 
-### 3.4 Ejemplo — shadowing en scope interno
+### 3.2 Shadowing en scopes internos
 
-Código:
+Se permite sombreado; cada símbolo tiene su propia ubicación lógica (global/stack/param + offset). El emisor usa **el símbolo resuelto** por el gestor de scopes en cada uso.
+
+Ejemplo:
 
 ```c
 let a: int = 1;
 {
   let a: int = 2; // sombra
-  x = a;          // usa el interno
+  x = a;          // interno
 }
-y = a;            // usa el externo
+y = a;            // externo
 ```
 
 TAC (esqueleto):
 
 ```bash
 a   = 1
-; entrar a bloque: símbolo 'a' (interno) con offset diferente
-a#1 = 2             ; conceptual: dirección distinta (stack offset)
+; bloque interno: 'a' interno con offset distinto
+a#1 = 2
 x   = a#1
-; salir de bloque
-y   = a             ; el externo
+; fuera del bloque
+y   = a
 ```
-
-En el 3AC textual se representó con el mismo lexema `a`, pero el **resolutor de símbolos** estableció diferentes ubicaciones lógicas; los cuádruplos internos apuntaron al `offset` del símbolo interno.
 
 ## 4. Estrategias de temporales, etiquetas y control de flujo
 
 ### 4.1 Temporales
 
-- Se empleó un **pool de temporales por función**, aislado entre funciones/procedimientos.
-- Se recicló en **post-orden por sentencia**. Al suprimir la emisión por error o por código muerto, se **liberaron** temporales evaluados previamente que no se usaron.
-- No se reutilizaron **identificadores de temporales** entre funciones (espacio de nombres por función), evitando colisiones semánticas.
+* **Pool por función** (aislado entre funciones/métodos).
+* Reciclaje **por sentencia** (post-orden).
+* Ante error o región muerta, se liberan los temporales ya evaluados que no se usan.
 
 ### 4.2 Etiquetas
 
-- Se generaron etiquetas (`Lk`) de forma **monótona**.
-- En presencia de **código muerto** posterior a una etiqueta ya emitida, **no** se generaron **nuevas etiquetas** innecesarias; se cerró el bloque actual y se continuó con la siguiente estructura válida.
+* Generación **monótona** de `Lk`.
+* En regiones muertas no se crean etiquetas nuevas innecesarias; solo se cierran bloques si era requerido.
 
 ### 4.3 Control de flujo
 
-- Las condiciones se tradujeron con **corto-circuito** y **saltos** (`if ... goto`, `ifFalse ... goto`), sin materializar booleanos intermedios salvo en contextos de valor.
-- Para `break`/`continue`, se usó una **pila de contextos** para resolver destinos (`Lend`, `Lstep`/`Lstart`), y se propagó el estado de **terminación de flujo** al emisor.
+* Condiciones con **corto-circuito** vía `if ... goto`/`ifFalse ... goto` (sin materializar booleanos salvo en contextos de valor).
+* `break`/`continue` resueltos con **pila de contextos** de bucle/switch (destinos `Lend`, `Lstep`/`Lstart`).
 
-**Justificación.** Estas estrategias mantuvieron **determinismo** y **compacidad** del 3AC, y sostuvieron la coherencia con la semántica de finalización de bloques y verificación de alcance.
+## 5. Justificación unificada
 
-## 5. Justificación unificada de diseño
+1. **Separación de responsabilidades**: semántica valida; TAC emite solo sobre entrada correcta y **suprime** emisiones inválidas.
+2. **Fidelidad del flujo**: las barreras por terminación hacen que el IR refleje exactamente lo ejecutable, simplificando CFG/analizadores posteriores.
+3. **Consistencia con símbolos**: uso de `storage/offset/scope_id` evita ambigüedades y dobles escrituras.
+4. **Economía de IR**: reciclaje de temporales y prudencia con etiquetas mantienen 3AC compacto y estable.
 
-1. **Separación de responsabilidades.** La **validación semántica** (tipos, existencia, contextos) se realizó antes de la generación de TAC. El emisor trabajó con **entradas ya validadas**, suprimió emisiones ante errores y mantuvo el 3AC **coherente y ejecutable** para las porciones válidas.
-2. **Reflejo fiel de la inalcanzabilidad.** Suprimir emisión en **regiones muertas** hizo que el TAC coincidiera con el flujo real, simplificando análisis posteriores (liveness, construcción de CFG) y cumpliendo la expectativa de la rúbrica (`docs/README_TAC_GENERATION.md`).
-3. **Consistencia con la tabla de símbolos.** Respetar `storage`, `offset`, `width`, `scope_id` y la política de duplicados/shadowing aseguró que el TAC refiriera **ubicaciones correctas** y no produjera estados inconsistentes.
-4. **Economía de temporales y etiquetas.** El reciclaje local y el control de etiquetas mantuvieron el IR compacto, legible y **estable** ante optimizaciones, sin fugas entre funciones ni distorsiones por errores locales.
+## 6. Pseudocódigo (resumen)
 
-## 6. Pseudocódigo de emisión (resumen)
-
-### 6.1 Barrera de emisión por terminación de flujo
+### 6.1 Barrera de emisión
 
 ```text
-function emitStmt(S):
-    if currentBlock.terminated: 
-        return  ; suprimir emisión en región muerta
-    R = analyzeAndMaybeEmit(S)
-    if R.terminates:
-        currentBlock.terminated = true
+emitStmt(S):
+  if currentBlock.terminated:
+      return
+  R = analyzeAndMaybeEmit(S)
+  if R.terminates:
+      currentBlock.terminated = true
 ```
 
 ### 6.2 Emisión de expresión con validación previa
 
 ```text
-function emitExpr(E):
-    if E.hasSemanticError:
-        return None  ; no emitir, no crear temporales
-    R = translateToPlace(E)  ; genera TAC si es necesario
-    return R
+emitExpr(E):
+  if E.hasSemanticError:
+      return None
+  return translateToPlace(E)
 ```
 
-### 6.3 Manejo de duplicados
+### 6.3 Declaración con detección de duplicados
 
 ```text
-function declareSymbol(name, type):
-    if currentScope.contains(name):
-        diagnostics.error("duplicated declaration")
-        return None
-    sym = currentScope.add(name, type, storage, offset, width)
-    return sym
+declareSymbol(name, type):
+  if currentScope.contains(name):
+      error("duplicated declaration")
+      return None
+  return currentScope.add(name, type, storage, offset, width)
 ```
 
 ## 7. Ejemplos integrados
 
-### 7.1 Mezcla de retorno temprano y código posterior
-
-Código:
-
-```c
-function abs(a: int): int {
-  if (a >= 0) return a;
-  let b: int = -a;
-  return b;
-  b = b + 1; // muerto
-}
-```
-
-TAC:
+### 7.1 Retorno temprano y código posterior muerto
 
 ```bash
 f_abs:
@@ -250,45 +205,25 @@ Lcont:
     t1 = - a
     b  = t1
     return b
-; sin emisión para "b = b + 1"
+; sin emisión para código tras el segundo return
 ```
 
-### 7.2 Duplicado de parámetro (no emisión adicional)
-
-Código:
-
-```c
-function f(x: int, x: int): void { } // error semántico
-```
-
-TAC:
+### 7.2 Duplicado de parámetro (suprimido)
 
 ```bash
 f_f:
 enter f_f, <frame>
 return
-; sin redefinición ni reservas duplicadas para "x"
+; sin redefinir "x" ni reservar dos veces
 ```
 
 ### 7.3 Expresión inválida suprimida y continuación del bloque
-
-Código:
-
-```c
-function h(): void {
-  let y: int = 0;
-  y = print * 2; // inválido si 'print' no es valor numérico
-  y = 3;         // válido
-}
-```
-
-TAC:
 
 ```bash
 f_h:
 enter f_h, <frame>
 y = 0
-; sin emisión para "y = print * 2"
+; sin emisión para "y = print * 2" si es inválido
 y = 3
 return
 ```
