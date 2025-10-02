@@ -18,8 +18,8 @@ class Diagnostics:
         log_semantic(f"ERROR: {err}")
         return err
 
-    def any(self):
+    def hasErrors(self):
         return len(self.errors) > 0
 
-    def all(self):
+    def getAll(self):
         return list(self.errors)

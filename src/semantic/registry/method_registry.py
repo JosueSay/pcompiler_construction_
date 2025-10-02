@@ -6,11 +6,11 @@ class MethodRegistry:
     def __init__(self):
         self.methods = {}
 
-    def register(self, qname, param_types, return_type):
+    def registerMethod(self, qname, param_types, return_type):
         self.methods[qname] = (param_types or [], return_type)
 
-    def lookup(self, qname):
+    def lookupMethod(self, qname):
         return self.methods.get(qname)
 
-    def exists(self, qname):
+    def existsMethod(self, qname):
         return qname in self.methods

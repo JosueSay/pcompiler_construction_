@@ -2,7 +2,7 @@ from semantic.custom_types import IntegerType, StringType, BoolType, NullType, E
 from semantic.errors import SemanticError
 from logs.logger_semantic import log_semantic
 
-def validateLiteral(text, errorList, ctx=None):
+def validateLiteral(text, error_list, ctx=None):
     """
     Determina el tipo semántico de un literal.
     """
@@ -25,5 +25,5 @@ def validateLiteral(text, errorList, ctx=None):
             column=column
         )
         log_semantic(f"ERROR: {error}")
-        errorList.append(error)
+        error_list.append(error)
         return ErrorType()

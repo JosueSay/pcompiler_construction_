@@ -79,7 +79,7 @@ class VisitorCPS(CompiscriptVisitor):
                         line=cd.start.line, column=cd.start.column))
                 else:
                     self.known_classes.add(cname)
-                    self.class_handler.ensure_class(cname, base)
+                    self.class_handler.ensureClass(cname, base)
                     if base:
                         log_semantic(f"[class] (pre-scan) declarada: {cname} : {base}")
                     else:

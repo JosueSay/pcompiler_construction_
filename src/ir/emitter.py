@@ -6,7 +6,6 @@ from datetime import datetime
 from .tac import Quad, Op
 from .labels import LabelMaker
 from .temp_pool import TempPool
-from .ra import ActivationRecordTools
 
 
 class Emitter:
@@ -76,15 +75,14 @@ class Emitter:
         self.emit(Op.UNARY, arg1=value, res=dst, label=op_text)
 
     def emitNewList(self, dest_place: str, n_elems: int) -> None:
-        self.emit(Op.NEWLIST, n_elems, None, dest_place)
+        self.emit(Op.NEWLIST, arg1=n_elems, res=dest_place)
 
     def emitLen(self, dest_place: str, arr_place: str):
-        """
-        Emite: dest_place = len arr_place
-        (Pseudo-op de TAC, no expone 'len' al lenguaje)
-        """
-        from ir.tac import Op
         return self.emit(Op.LEN, arg1=arr_place, res=dest_place)
+
+    def endFunction(self) -> None:
+        self.emit(Op.LEAVE)
+        self.markFlowTerminated()
 
     def emitBoundsCheck(self, idx_place: str, arr_place: str):
         """
@@ -98,7 +96,6 @@ class Emitter:
            L_ok:
         Retorna: (t_len, L_ok)
         """
-        from ir.tac import Op
         t_len = self.temp_pool.newTemp("int")
         self.emitLen(t_len, arr_place)
 

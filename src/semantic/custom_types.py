@@ -16,11 +16,6 @@ class IntegerType(Type):
     pass
 
 
-class FloatType(Type):
-    """Tipo de dato de punto flotante (8 bytes)."""
-    pass
-
-
 class StringType(Type):
     """Tipo de cadena de texto (8 bytes como referencia o puntero)."""
     pass
@@ -66,20 +61,20 @@ class ClassType(Type):
     def __str__(self):
         return f"class {self.name}"
 
-    def has_member(self, name: str):
+    def hasMember(self, name: str):
         """Verifica si un atributo o método existe en la clase o en su herencia."""
         if name in self.members:
             return True
         if self.parent:
-            return self.parent.has_member(name)
+            return self.parent.hasMember(name)
         return False
 
-    def get_member(self, name: str):
+    def getMember(self, name: str):
         """Obtiene el tipo de un atributo o método."""
         if name in self.members:
             return self.members[name]
         if self.parent:
-            return self.parent.get_member(name)
+            return self.parent.getMember(name)
         return None
 
 
@@ -98,10 +93,10 @@ class StructType(Type):
     def __str__(self):
         return f"struct {self.name}"
 
-    def has_member(self, name: str):
+    def hasMember(self, name: str):
         return name in self.members
 
-    def get_member(self, name: str):
+    def getMember(self, name: str):
         return self.members.get(name)
 
 

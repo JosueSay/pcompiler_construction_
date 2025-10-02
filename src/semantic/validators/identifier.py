@@ -2,13 +2,13 @@ from semantic.custom_types import ErrorType
 from semantic.errors import SemanticError
 from logs.logger_semantic import log_semantic
 
-def validateIdentifier(name, symbolTable, errorList, ctx=None):
+def validateIdentifier(name, symbol_table, error_list, ctx=None):
     """
     Valida el uso de un identificador en una tabla plana (modo auxiliar).
     """
     log_semantic(f"Validating identifier: {name}")
 
-    symbol = symbolTable.get(name)
+    symbol = symbol_table.get(name)
 
     if not symbol:
         line = ctx.start.line if ctx else None
@@ -19,7 +19,7 @@ def validateIdentifier(name, symbolTable, errorList, ctx=None):
             column=column
         )
         log_semantic(f"ERROR: {error}")
-        errorList.append(error)
+        error_list.append(error)
         return ErrorType()
 
     log_semantic(f"Identifier '{name}' resolved with type: {symbol.type}")

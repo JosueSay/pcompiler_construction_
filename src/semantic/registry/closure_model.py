@@ -6,8 +6,7 @@ class CaptureInfo:
     """
     Información de variables capturadas por una función anidada.
     """
-    # Lista de (name, type_str, scope_id_original)
-    captured: list[Tuple[str, str, int]]
+    captured: list[Tuple[str, str, int]]  # (name, type_str, original_scope_id)
 
-    def as_debug(self) -> str:
+    def asDebug(self) -> str:
         return ", ".join(f"{n}:{t}@scope{sid}" for n, t, sid in self.captured)

@@ -1,25 +1,25 @@
 class Symbol:
     """
-    Representa una entrada en la tabla de símbolos.
+    Entrada de la tabla de símbolos.
 
     Atributos:
-        name (str): Nombre del identificador.
-        type_ (Type): Instancia de tipo semántico (IntegerType, StringType, etc.).
-        category (str): Categoría del símbolo ('variable', 'function', etc.).
-        scope_id (int): ID del ámbito donde fue declarado.
-        offset (int): Posición relativa dentro del ámbito.
-        width (int): Tamaño en bytes.
-        param_types (List[Type]): Tipos de parámetros si el símbolo es función.
-        return_type (Type): Tipo de retorno si es función.
-        initialized (bool): Si fue inicializado (True) o no (False).
-        init_value_type (Type|None): Tipo del valor usado para inicializar (p.ej. NullType()).
-        init_note (str|None): Nota breve del origen de la inicialización (p.ej. 'explicit', 'default-null', 'missing-initializer').
-        storage (str): 'global' | 'stack' | 'param' (futuro) -> donde vive la celda del símbolo
-        is_ref (bool): si el valor almacenado es un puntero (referencia).
-        
-        addr_class (str): 'global' | 'stack' | 'param' (clase lógica usada por el TAC).
-        label (str | None): etiqueta de entrada (funciones/métodos).
-        local_frame_size (int | None): tamaño del marco al cerrar el scope de función/método.
+        name (str)
+        type (Type)                      # Nota: se usa 'type' (no 'type_') para compatibilidad actual
+        category (str)                   # 'variable', 'function', 'parameter', 'class', 'field', ...
+        scope_id (int)
+        offset (int)                     # posición relativa en memoria
+        width (int)
+        initialized (bool)
+        init_value_type (Type | None)    # NUEVO: tipo del valor del inicializador si aplica
+        init_note (str | None)           # NUEVO: nota textual del inicializador si aplica
+        param_types (List[Type])
+        return_type (Type | None)
+        fields (Dict[str, Type])
+        label (str | None)
+        storage (str)                    # 'global' | 'stack' | 'param'
+        addr_class (str)                 # 'global' | 'stack' | 'param' (lógico para TAC)
+        is_ref (bool)                    # NUEVO: si es referencia (string, class, array)
+        local_frame_size (int | None)
     """
 
     def __init__(
@@ -30,17 +30,18 @@ class Symbol:
         scope_id,
         offset=0,
         width=4,
-        param_types=None,
-        return_type=None,
         initialized=False,
         init_value_type=None,
         init_note=None,
-        *,
-        storage="stack",
-        is_ref=False,
-        addr_class=None,
+        param_types=None,
+        return_type=None,
+        fields=None,
         label=None,
-        local_frame_size=None
+        storage="stack",
+        addr_class=None,
+        *,
+        is_ref: bool = False,
+        local_frame_size: int | None = None,
     ):
         self.name = name
         self.type = type_
@@ -48,35 +49,40 @@ class Symbol:
         self.scope_id = scope_id
         self.offset = offset
         self.width = width
-        self.param_types = param_types or []
-        self.return_type = return_type
+
         self.initialized = initialized
         self.init_value_type = init_value_type
         self.init_note = init_note
-        
-        self.storage = storage          # 'global' o 'stack'
-        self.is_ref = is_ref
 
-        # Vista lógica para el TAC
-        self.addr_class = addr_class or storage   # 'global' | 'stack' | 'param'
-
-        # Metadatos para IR/RA
+        self.param_types = param_types or []
+        self.return_type = return_type
+        self.fields = fields or {}
         self.label = label
+
+        self.storage = storage
+        self.addr_class = addr_class or storage
+
+        self.is_ref = is_ref
         self.local_frame_size = local_frame_size
 
+    # Helpers...
+    def isVariable(self) -> bool: return self.category == "variable"
+    def isConstant(self) -> bool: return self.category == "constant"
+    def isFunction(self) -> bool: return self.category == "function"
+    def isParameter(self) -> bool: return self.category == "parameter"
+    def isClass(self) -> bool:     return self.category == "class"
+    def isField(self) -> bool:     return self.category == "field"
+
+    def storageClass(self) -> str:
+        return self.addr_class
+
+    def hasLabel(self) -> bool:
+        return bool(self.label)
+
     def __repr__(self):
-        base = (
+        return (
             f"Symbol(name={self.name}, type={self.type}, category={self.category}, "
             f"scope={self.scope_id}, offset={self.offset}, width={self.width}, "
-            f"storage={self.storage}, addr_class={self.addr_class}, is_ref={self.is_ref}"
+            f"initialized={self.initialized}, storage={self.storage}, addr_class={self.addr_class}, "
+            f"is_ref={self.is_ref}, local_frame_size={self.local_frame_size})"
         )
-        init_part = f", initialized={self.initialized}"
-        if self.init_value_type is not None:
-            init_part += f", init_value_type={self.init_value_type}"
-        if self.init_note:
-            init_part += f", init_note={self.init_note}"
-        if self.label:
-            init_part += f", label={self.label}"
-        if self.local_frame_size is not None:
-            init_part += f", local_frame_size={self.local_frame_size}"
-        return base + init_part + ")"

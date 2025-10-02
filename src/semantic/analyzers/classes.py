@@ -17,7 +17,7 @@ class ClassesAnalyzer:
         log_semantic(f"[class] definición: {name}" + (f" : {base}" if base else ""))
 
         # Registrar en ClassHandler (no valida existencia de base aquí; se hizo en pre-scan)
-        self.v.class_handler.ensure_class(name, base)
+        self.v.class_handler.ensureClass(name, base)
 
         self.v.class_stack.append(name)
         self.v.scopeManager.enterScope()
