@@ -6,72 +6,84 @@ from typing import Any
 
 
 class Op(Enum):
-    # Pseudo-ops de RA
-    ENTER = "enter"
-    LEAVE = "leave"
-    RETURN = "return"
+    """
+    Conjunto cerrado de operaciones 3AC (TAC) que el backend entiende.
+    No hay alias ni nombres duplicados: estos son los únicos válidos.
 
-    # Flujo
-    LABEL = "label"
-    GOTO = "goto"
-    IF_GOTO = "if_goto"
-    IF_FALSE_GOTO = "if_false_goto"
+    Convenciones de campos en cada Quad:
+      - arg1, arg2: operandos o metadatos puntuales (p. ej., condición o n_args)
+      - res:        destino (si aplica)
+      - label:      campo contextual (operador textual, nombre de campo, etc.)
+    """
 
-    # Asignaciones y expr
-    ASSIGN = "assign"          # res = arg1
-    UNARY = "unary"            # res = op arg1 (arg2 guarda el operador textual si se necesitara)
-    BINARY = "binary"          # res = arg1 op arg2 (label guarda el operador textual)
+    # --- Runtime activation (marcos de llamada) ---
+    ENTER   = "enter"   # enter f_label, frame_size
+    LEAVE   = "leave"   # leave
+    RETURN  = "return"  # return [place]
 
-    # Llamadas
-    PARAM = "param"
-    CALL = "call"              # [res =] call f, n
-    CALLC = "callc"            # [res =] callc clos, n  (closures)
+    # --- Control de flujo ---
+    LABEL         = "label"       # <L>:
+    GOTO          = "goto"        # goto <L>
+    IF_GOTO       = "if_goto"     # if <cond> goto <L>
+    IF_FALSE_GOTO = "if_false_goto"  # ifFalse <cond> goto <L>
 
-    # Estructuras de datos
-    INDEX_LOAD = "index_load"  # res = a[i]
-    INDEX_STORE = "index_store"# a[i] = res
-    FIELD_LOAD = "field_load"  # res = obj.f
-    FIELD_STORE = "field_store"# obj.f = res
-    LEN = "len"                # res = len a
-    NEWLIST = "newlist"        # res = newlist n
-    NEWOBJ = "newobj"          # res = newobj C, size
+    # --- Expresiones / asignaciones ---
+    ASSIGN = "assign"   # res = arg1
+    UNARY  = "unary"    # res = (label) arg1          ; label guarda el operador textual
+    BINARY = "binary"   # res = arg1 (label) arg2     ; label guarda el operador textual
 
-    # Closures
-    MKENV = "mkenv"            # res = mkenv ...
-    MKCLOS = "mkclos"          # res = mkclos f_label, env
+    # --- Llamadas ---
+    PARAM = "param"     # param arg1
+    CALL  = "call"      # [res =] call f_label, n_args
+    CALLC = "callc"     # [res =] callc clos_place, n_args  (closures)
+
+    # --- Estructuras de datos ---
+    INDEX_LOAD  = "index_load"   # res = a[i]
+    INDEX_STORE = "index_store"  # a[i] = res                ; label = i si viene como texto
+    FIELD_LOAD  = "field_load"   # res = obj.field           ; label = "field"
+    FIELD_STORE = "field_store"  # obj.field = res           ; label = "field"
+    LEN         = "len"          # res = len a
+    NEWLIST     = "newlist"      # res = newlist n
+    NEWOBJ      = "newobj"       # res = newobj ClassName, size
+
+    # --- Closures ---
+    MKENV  = "mkenv"    # res = mkenv x,y,z
+    MKCLOS = "mkclos"   # res = mkclos f_label, env_place
 
 
 @dataclass
 class Quad:
+    """
+    Representa una instrucción TAC. Los campos son intencionalmente genéricos
+    (Any) porque algunos backends pasan enteros (p. ej. n_args) o strings
+    indistintamente. La serialización textual normaliza todo.
+    """
     op: Op
-    arg1: str | None = None
-    arg2: str | None = None
-    res: str | None = None
-    label: str | None = None   # uso contextual: operador textual, nombre de campo, etc.
+    arg1: Any | None = None
+    arg2: Any | None = None
+    res: Any | None = None
+    label: Any | None = None
 
     def toText(self) -> str:
         o = self.op
 
         if o is Op.LABEL:
-            # res = nombre de la etiqueta
             return f"{self.res}:"
 
         if o is Op.GOTO:
             return f"goto {self.arg1}"
 
         if o is Op.IF_GOTO:
-            # arg1 = condición textual (p. ej., "x < y"), arg2 = destino
             return f"if {self.arg1} goto {self.arg2}"
 
         if o is Op.IF_FALSE_GOTO:
             return f"ifFalse {self.arg1} goto {self.arg2}"
 
         if o is Op.ENTER:
-            # arg1 = nombre función, arg2 = tamaño frame
             return f"enter {self.arg1}, {self.arg2}"
 
         if o is Op.LEAVE:
-            return f"leave {self.arg1}" if self.arg1 else "leave"
+            return "leave"
 
         if o is Op.RETURN:
             return "return" if self.arg1 is None else f"return {self.arg1}"
@@ -80,62 +92,50 @@ class Quad:
             return f"param {self.arg1}"
 
         if o is Op.CALL:
-            # arg1 = f_label, arg2 = n_args
             return f"{self.res} = call {self.arg1}, {self.arg2}" if self.res else f"call {self.arg1}, {self.arg2}"
 
         if o is Op.CALLC:
-            # arg1 = closure, arg2 = n_args
             return f"{self.res} = callc {self.arg1}, {self.arg2}" if self.res else f"callc {self.arg1}, {self.arg2}"
 
         if o is Op.ASSIGN:
-            # res = arg1
             return f"{self.res} = {self.arg1}"
 
         if o is Op.UNARY:
-            # label almacena el operador textual
-            op_txt = self.label or ""
+            op_txt = str(self.label or "")
+            # Formato compacto: "t1 = - x" o "t1 = ! x"
             return f"{self.res} = {op_txt} {self.arg1}".strip()
 
         if o is Op.BINARY:
-            # label almacena el operador textual
-            op_txt = self.label or "?"
+            op_txt = str(self.label or "?")
             return f"{self.res} = {self.arg1} {op_txt} {self.arg2}"
 
         if o is Op.INDEX_LOAD:
-            # res = a[i]
             return f"{self.res} = {self.arg1}[{self.arg2}]"
 
         if o is Op.INDEX_STORE:
-            # arg1[i] = res  (res contiene el valor a almacenar)
+            # Nota: usamos label para el índice textual si vino así
             return f"{self.arg1}[{self.label}] = {self.res}"
 
         if o is Op.FIELD_LOAD:
-            # res = obj.f  (label = "f")
             return f"{self.res} = {self.arg1}.{self.label}"
 
         if o is Op.FIELD_STORE:
-            # obj.f = res  (label = "f")
             return f"{self.arg1}.{self.label} = {self.res}"
 
         if o is Op.LEN:
-            # res = len a
             return f"{self.res} = len {self.arg1}"
 
         if o is Op.NEWLIST:
-            # res = newlist n
             return f"{self.res} = newlist {self.arg1}"
 
         if o is Op.NEWOBJ:
-            # res = newobj C, size
             return f"{self.res} = newobj {self.arg1}, {self.arg2}"
 
         if o is Op.MKENV:
-            # res = mkenv a,b,c
             return f"{self.res} = mkenv {self.arg1}"
 
         if o is Op.MKCLOS:
-            # res = mkclos f_label, env
             return f"{self.res} = mkclos {self.arg1}, {self.arg2}"
 
-        # Fallback (no debería alcanzarse)
+        # Si algo llega aquí, es un bug en la emisión.
         return f"; <unknown quad> {self}"

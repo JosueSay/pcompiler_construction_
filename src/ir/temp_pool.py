@@ -3,54 +3,52 @@ from __future__ import annotations
 
 class TempPool:
     """
-    Pool de temporales por función, con reciclaje por tipo.
-    - newTemp(type_name) => "tN"
-    - free(name, type_name)
-    - resetPerStatement()
-    - resetPerFunction()
-    """
-    def __init__(self) -> None:
-        self.next_id: int = 0
-        self.free_pools: dict[str, list[str]] = {}
-        self.live_since_stmt: list[str] = []
+    Generador sencillo de nombres temporales por *función*.
 
-    def newTemp(self, type_name: str) -> str:
-        pool = self.free_pools.get(type_name)
-        if pool and len(pool) > 0:
-            name = pool.pop()
-        else:
-            self.next_id += 1
-            name = f"t{self.next_id}"
-        self.live_since_stmt.append(name)
+    Decisiones:
+      - No se reciclan identificadores: cada función arranca en t1 y
+        se numeran en orden (t1, t2, ...). Es suficiente para el 3AC.
+      - El parámetro `kind` existe porque el resto del pipeline lo pasa
+        ("int", "bool", "ref", "*"), pero aquí solo sirve de anotación.
+      - `free()` es intencionalmente un no-op. Se deja el gancho por si en
+        el futuro quieres implementar reciclaje real.
+
+    API estable (usada por el resto del backend):
+      - newTemp(kind="*") -> str
+      - free(name, kind="*") -> None
+      - resetPerStatement() -> None
+      - resetPerFunction()  -> None
+    """
+
+    def __init__(self) -> None:
+        self.next: int = 1              # contador por función
+        self.per_stmt: set[str] = set() # temporales creados en la sentencia actual
+        self.per_func: set[str] = set() # temporales creados en la función actual
+
+    def newTemp(self, kind: str = "*") -> str:
+        """
+        Devuelve un nuevo nombre temporal (tN). `kind` se ignora para el
+        nombre pero se mantiene por compatibilidad con los llamadores.
+        """
+        name = f"t{self.next}"
+        self.next += 1
+        self.per_stmt.add(name)
+        self.per_func.add(name)
         return name
 
-    def free(self, name: str, type_name: str) -> None:
-        pool = self.free_pools.setdefault(type_name, [])
-        pool.append(name)
+    def free(self, name: str, kind: str = "*") -> None:
+        """
+        Gancho para liberar un temporal. No hace nada a propósito.
+        Se conserva para no romper a los llamadores.
+        """
+        return
 
-    def resetPerStatement(self, type_resolver: callable | None = None) -> None:
-        """
-        Libera los temporales usados en la sentencia actual hacia sus pools.
-        Si se aporta type_resolver(name) -> type_name, se clasifica por tipo.
-        """
-        if not self.live_since_stmt:
-            return
-        if type_resolver is None:
-            # Si no hay resolution de tipo, devolverlos a un pool genérico.
-            for name in self.live_since_stmt:
-                pool = self.free_pools.setdefault("*", [])
-                pool.append(name)
-        else:
-            for name in self.live_since_stmt:
-                type_name = type_resolver(name)
-                pool = self.free_pools.setdefault(type_name, [])
-                pool.append(name)
-        self.live_since_stmt.clear()
+    def resetPerStatement(self) -> None:
+        """Marca el fin de una sentencia: limpiamos el set por-sentencia."""
+        self.per_stmt.clear()
 
     def resetPerFunction(self) -> None:
-        """
-        Reinicia el espacio de nombres de temporales para la función.
-        """
-        self.next_id = 0
-        self.free_pools.clear()
-        self.live_since_stmt.clear()
+        """Marca el inicio de una nueva función: reinicia numeración y sets."""
+        self.per_func.clear()
+        self.per_stmt.clear()
+        self.next = 1

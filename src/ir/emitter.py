@@ -10,8 +10,13 @@ from .temp_pool import TempPool
 
 class Emitter:
     """
-    Acumula cuádruplos y genera 3AC textual/HTML.
-    Pensado para inyectarse en el Visitor semántico.
+    Constructor de 3AC (TAC).
+
+    - Acumula quads y puede serializarlos a texto/HTML.
+    - Administra etiquetas y temporales.
+    - Implementa una barrera de flujo (post-`return`) para suprimir emisión
+      de quads en regiones inalcanzables, permitiendo únicamente `LABEL`
+      (necesario para cerrar/controlar CFG).
     """
 
     def __init__(self, program_name: str = "main") -> None:
@@ -20,50 +25,64 @@ class Emitter:
         self.label_maker = LabelMaker()
         self.temp_pool = TempPool()
         self.header_lines: list[str] = []
-        self.flow_terminated: bool = False  # barrera de emisión (p.ej., tras return)
+        self.flow_terminated: bool = False
 
-        self.addHeaderLine(f"; Compiscript TAC")
+        self.addHeaderLine("; Compiscript TAC")
         self.addHeaderLine(f"; program: {self.program_name}")
         self.addHeaderLine(f"; generated: {datetime.now().isoformat(timespec='seconds')}")
 
-    # ------------- Cabecera / control --------------
+
+    # ---------- cabecera / control ----------
 
     def addHeaderLine(self, text: str) -> None:
         self.header_lines.append(text)
 
     def markFlowTerminated(self) -> None:
+        """Activa la barrera de flujo: suprime quads futuros (excepto `LABEL`)."""
         self.flow_terminated = True
 
     def clearFlowTermination(self) -> None:
+        """Desactiva la barrera de flujo (p.ej., al entrar a una función)."""
         self.flow_terminated = False
 
-    # ------------- Emisión básica ------------------
 
-    def emit(self, op: Op, arg1: str | None = None, arg2: str | None = None,
-             res: str | None = None, label: str | None = None) -> Quad | None:
+    # ---------- emisión básica ----------
+
+    def emit(
+        self,
+        op: Op,
+        arg1: str | None = None,
+        arg2: str | None = None,
+        res: str | None = None,
+        label: str | None = None,
+    ) -> Quad | None:
+        """
+        Inserta un quad si no hay barrera activa. Si la hay, solo acepta `LABEL`.
+        Devuelve el quad emitido o None si se suprimió.
+        """
         if self.flow_terminated and op not in (Op.LABEL,):
-            # Suprimimos emisión en regiones muertas, pero permitimos etiquetas ya reservadas.
             return None
         q = Quad(op=op, arg1=arg1, arg2=arg2, res=res, label=label)
         self.quads.append(q)
         return q
 
-    def emitLabel(self, name: str) -> Quad:
+    def emitLabel(self, name: str) -> Quad | None:
         return self.emit(Op.LABEL, res=name)  # type: ignore
 
     def newLabel(self, prefix: str = "L") -> str:
         return self.label_maker.newLabel(prefix)
 
-    # ------------- Atajos frecuentes ---------------
 
-    def emitGoto(self, label_name: str) -> None:
-        self.emit(Op.GOTO, arg1=label_name)
+    # ---------- atajos frecuentes ----------
 
-    def emitIfGoto(self, cond_text: str, label_name: str) -> None:
-        self.emit(Op.IF_GOTO, arg1=cond_text, arg2=label_name)
+    def emitGoto(self, target: str) -> None:
+        self.emit(Op.GOTO, arg1=target)
 
-    def emitIfFalseGoto(self, cond_text: str, label_name: str) -> None:
-        self.emit(Op.IF_FALSE_GOTO, arg1=cond_text, arg2=label_name)
+    def emitIfGoto(self, cond_text: str, target: str) -> None:
+        self.emit(Op.IF_GOTO, arg1=cond_text, arg2=target)
+
+    def emitIfFalseGoto(self, cond_text: str, target: str) -> None:
+        self.emit(Op.IF_FALSE_GOTO, arg1=cond_text, arg2=target)
 
     def emitAssign(self, dst: str, src: str) -> None:
         self.emit(Op.ASSIGN, arg1=src, res=dst)
@@ -77,30 +96,33 @@ class Emitter:
     def emitNewList(self, dest_place: str, n_elems: int) -> None:
         self.emit(Op.NEWLIST, arg1=n_elems, res=dest_place)
 
-    def emitLen(self, dest_place: str, arr_place: str):
+    def emitLen(self, dest_place: str, arr_place: str) -> Quad | None:
         return self.emit(Op.LEN, arg1=arr_place, res=dest_place)
 
-    def endFunction(self) -> None:
-        self.emit(Op.LEAVE)
-        self.markFlowTerminated()
 
-    def emitBoundsCheck(self, idx_place: str, arr_place: str):
+    # ---------- patrón de bounds-check ----------
+
+    def emitBoundsCheck(self, idx_place: str, arr_place: str) -> tuple[str, str]:
         """
-        Patrón estándar de bounds check para a[i] o t_arr[i].
-        Emite:
-           t_len = len arr_place
-           if idx_place < 0 goto L_oob
-           if idx_place >= t_len goto L_oob
-           goto L_ok
-           L_oob: call __bounds_error, 0
-           L_ok:
-        Retorna: (t_len, L_ok)
+        Verificación de límites para `arr[idx]`.
+
+        Emite la secuencia:
+            t_len = len arr
+            if idx < 0       goto L_oob
+            if idx >= t_len  goto L_oob
+            goto L_ok
+          L_oob:
+            call __bounds_error, 0
+          L_ok:
+
+        Devuelve:
+            (t_len, L_ok)
         """
         t_len = self.temp_pool.newTemp("int")
         self.emitLen(t_len, arr_place)
 
         l_oob = self.newLabel("oob")
-        l_ok  = self.newLabel("ok")
+        l_ok = self.newLabel("ok")
 
         self.emitIfGoto(f"{idx_place}<0", l_oob)
         self.emitIfGoto(f"{idx_place}>={t_len}", l_oob)
@@ -112,56 +134,60 @@ class Emitter:
 
         return t_len, l_ok
 
-    # ------------- RA helpers ----------------------
-    
+
+    # ---------- helpers de función ----------
+
     def beginFunction(self, func_label: str, local_frame_size: int | None) -> None:
         """
-        Abre un nuevo contexto de función:
-        - resetea el pool de temporales por función
-        - limpia cualquier barrera de flujo (por returns previos)
-        - emite la etiqueta y el prólogo lógico 'enter'
+        Prólogo lógico de función:
+        - reinicia el pool de temporales (aislamiento por función)
+        - limpia barrera de flujo
+        - emite etiqueta y `enter`
         """
-        # Aislar temporales por función
         self.temp_pool.resetPerFunction()
-        # Asegurar que no hay barrera activada al entrar
         self.clearFlowTermination()
-        # Etiqueta de entrada
         self.emitLabel(func_label)
-        # Prológo lógico (usa 0 si aún no sabemos el frame real)
         size_text = str(local_frame_size if local_frame_size is not None else 0)
         self.emit(Op.ENTER, arg1=func_label, arg2=size_text)
 
     def endFunctionWithReturn(self, value_place: str | None = None) -> None:
         """
-        Emite 'return' (con o sin valor) y activa barrera de emisión
-        para suprimir cualquier 3AC posterior en el mismo bloque.
+        Retorno y cierre lógico de función:
+        - `return` (con o sin valor)
+        - activa la barrera de flujo para suprimir emisión posterior
         """
         if value_place is not None and value_place != "":
             self.emit(Op.RETURN, arg1=value_place)
         else:
             self.emit(Op.RETURN)
-        # Cerrar flujo del bloque actual
         self.markFlowTerminated()
 
-    # ------------- Serialización -------------------
+    def endFunction(self) -> None:
+        """
+        Cierre explícito sin `return`. Útil para prólogos/epílogos sintéticos.
+        Normalmente no se usa si `endFunctionWithReturn` ya cerró el flujo.
+        """
+        self.emit(Op.LEAVE)
+        self.markFlowTerminated()
+
+
+    # ---------- serialización ----------
 
     def toText(self) -> str:
         lines: list[str] = list(self.header_lines)
         if lines and lines[-1] != "":
             lines.append("")
         for q in self.quads:
-            if q.op == Op.LABEL:  # etiquetas sin sangría
+            if q.op == Op.LABEL:
                 lines.append(q.toText())
-            else:  # resto con tab
+            else:
                 lines.append("\t" + q.toText())
         return "\n".join(lines) + "\n"
 
-
-
     def writeTacText(self, out_dir: str, stem: str, *, simple_names: bool = False) -> str:
         """
-        Si simple_names=True, escribe 'program.tac' dentro de out_dir.
-        De lo contrario, usa '<stem>.tac' (compatibilidad).
+        Escribe TAC plano. Con `simple_names=True` el archivo se llama `program.tac`,
+        de lo contrario `<stem>.tac`.
         """
         os.makedirs(out_dir, exist_ok=True)
         filename = "program.tac" if simple_names else f"{stem}.tac"
@@ -172,13 +198,18 @@ class Emitter:
 
     def writeTacHtml(self, out_dir: str, stem: str, *, simple_names: bool = False) -> str:
         """
-        Si simple_names=True, escribe 'program.tac.html' dentro de out_dir.
-        De lo contrario, usa '<stem>.tac.html'.
+        Escribe una vista HTML simple del TAC. Con `simple_names=True` se llama
+        `program.tac.html`, de lo contrario `<stem>.tac.html`.
         """
         os.makedirs(out_dir, exist_ok=True)
         filename = "program.tac.html" if simple_names else f"{stem}.tac.html"
         path = os.path.join(out_dir, filename)
-        body = self.toText().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        body = (
+            self.toText()
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
         html = (
             "<!doctype html><meta charset='utf-8'>"
             "<title>Compiscript TAC</title>"
