@@ -1,18 +1,19 @@
 from typing import Any, List, Tuple, Iterable
 from antlr_gen.CompiscriptParser import CompiscriptParser
-from logs.logger_semantic import log_function
+from logs.logger import logFunction
 from semantic.symbol_kinds import SymbolCategory
 from semantic.custom_types import (
     BoolType, IntegerType, StringType, ClassType, ArrayType,
-    FunctionType, NullType, VoidType, ErrorType
+    FunctionType, NullType
 )
 
 # ======================
 # Helpers genéricos AST
 # ======================
 
-@log_function
+@logFunction(channel="tac")
 def asList(x) -> List[Any]:
+    """Convierte en lista: None -> [], secuencias iterables -> list(x), resto -> [x]."""
     if x is None:
         return []
     try:
@@ -21,20 +22,22 @@ def asList(x) -> List[Any]:
         return [x]
 
 
-@log_function
+@logFunction(channel="tac")
 def maybeCall(x: Any) -> Any:
+    """Si x es callable, lo invoca; si no, devuelve x."""
     return x() if callable(x) else x
 
 
-@log_function
+@logFunction(channel="tac")
 def safeAttr(ctx: Any, name: str) -> Any:
+    """getattr(ctx, name) con tolerancia a que sea callable (lo invoca)."""
     val = getattr(ctx, name, None)
     return maybeCall(val)
 
 
-@log_function
+@logFunction(channel="tac")
 def walk(node) -> Iterable[Any]:
-    """Recorrido DFS robusto sobre el árbol ANTLR."""
+    """DFS robusto sobre el árbol ANTLR (tolera nodos sin getChildren)."""
     try:
         for ch in node.getChildren():
             yield ch
@@ -43,8 +46,9 @@ def walk(node) -> Iterable[Any]:
         return
 
 
-@log_function
+@logFunction(channel="tac")
 def firstExpression(ctx) -> Any | None:
+    """Devuelve la primera Expression por convención: ctx.expression() o primer hijo expression."""
     e = safeAttr(ctx, "expression")
     if e is not None:
         return e
@@ -65,8 +69,12 @@ def firstExpression(ctx) -> Any | None:
     return None
 
 
-@log_function
+@logFunction(channel="tac")
 def splitAssignmentText(text: str) -> Tuple[str | None, str | None]:
+    """
+    Separa LHS y RHS de un texto con '=' simple, ignorando '==', '!=', '<=', '>='.
+    Devuelve (lhs, rhs) o (None, None) si no hay asignación sencilla.
+    """
     if not text:
         return None, None
     for i, ch in enumerate(text):
@@ -82,16 +90,22 @@ def splitAssignmentText(text: str) -> Tuple[str | None, str | None]:
     return None, None
 
 
-@log_function
+@logFunction(channel="tac")
 def isAssignText(text: str) -> bool:
+    """True si el texto contiene una asignación simple (no comparaciones)."""
     return bool(
         text and '=' in text and
         ('==' not in text) and ('!=' not in text) and ('<=' not in text) and ('>=' not in text)
     )
 
 
-@log_function
+@logFunction(channel="tac")
 def collectStmtOrBlock(ctx) -> List[Any]:
+    """
+    Devuelve los statements “visibles” de un if/else/while/for/switch:
+    - Primero intenta ctx.statement()
+    - Luego busca StatementContext o bloques compatibles entre hijos.
+    """
     stmts = asList(safeAttr(ctx, "statement"))
     if stmts:
         return stmts
@@ -112,8 +126,9 @@ def collectStmtOrBlock(ctx) -> List[Any]:
     return out
 
 
-@log_function
+@logFunction(channel="tac")
 def firstSwitchDiscriminant(ctx) -> Any | None:
+    """Para switch: devuelve la primera expresión discriminante razonable."""
     e = safeAttr(ctx, "expression")
     if e is None:
         return firstExpression(ctx)
@@ -126,8 +141,9 @@ def firstSwitchDiscriminant(ctx) -> Any | None:
     return firstExpression(ctx)
 
 
-@log_function
+@logFunction(channel="tac")
 def hasDefaultClause(ctx) -> bool:
+    """Heurística para detectar si un switch tiene 'default'."""
     default_ctx = getattr(CompiscriptParser, "DefaultClauseContext", None)
     try:
         for i in range(ctx.getChildCount()):
@@ -151,9 +167,9 @@ def hasDefaultClause(ctx) -> bool:
 # Switch helpers comunes
 # ======================
 
-@log_function
+@logFunction(channel="tac")
 def gatherStatements(node) -> List[Any]:
-    """Devuelve StatementContext dentro de node (directo o por recorrido)."""
+    """Recolecta StatementContext dentro de un nodo (directo o por recorrido DFS)."""
     out: List[Any] = []
     if node is None:
         return out
@@ -169,9 +185,9 @@ def gatherStatements(node) -> List[Any]:
     return out
 
 
-@log_function
+@logFunction(channel="tac")
 def firstChildExpression(node) -> Any | None:
-    """Primera Expression dentro de node (útil para 'case N:')."""
+    """Devuelve la primera Expression dentro de un nodo (útil para 'case N:')."""
     if node is None:
         return None
     e = safeAttr(node, "expression")
@@ -195,9 +211,12 @@ def firstChildExpression(node) -> Any | None:
 # Control de flujo utils
 # ======================
 
-@log_function
+@logFunction(channel="tac")
 def extractNotInner(node):
-    """Si hay un UnaryExpr con '!' devuelve su hijo interno; si no, None."""
+    """
+    Si encuentra un UnaryExpr con prefijo '!' devuelve su hijo interno.
+    Útil para simplificar condiciones en TAC (if !E ...).
+    """
     try:
         if type(node).__name__ in ("UnaryExprContext", "UnaryExpressionContext"):
             if node.getChildCount() >= 2 and node.getChild(0).getText() == "!":
@@ -218,30 +237,31 @@ def extractNotInner(node):
 # Utils de place/temporales en nodos AST
 # =====================================
 
-@log_function
+@logFunction(channel="tac")
 def setPlace(node, place: str, is_temp: bool) -> None:
-    """Guarda en el nodo su 'place' y si es temporal."""
+    """Anota en el nodo su 'place' (texto de TAC) y si es temporal."""
     try:
         setattr(node, "_place", place)
         setattr(node, "_is_temp", is_temp)
     except Exception:
-        # si el nodo no admite setattr, simplemente ignorar
-        pass
+        pass  # algunos nodos podrían no admitir setattr
 
 
-@log_function
+@logFunction(channel="tac")
 def getPlace(node) -> str | None:
+    """Lee el 'place' previamente anotado en el nodo (o None)."""
     return getattr(node, "_place", None)
 
 
-@log_function
+@logFunction(channel="tac")
 def isTempNode(node) -> bool:
+    """True si el nodo está marcado como temporal."""
     return bool(getattr(node, "_is_temp", False))
 
 
-@log_function
+@logFunction(channel="tac")
 def freeIfTemp(node, temp_pool, kind: str = "*") -> None:
-    """Libera el temporal asociado al nodo usando temp_pool."""
+    """Libera el temporal asociado al nodo usando el TempPool proporcionado."""
     if not isTempNode(node):
         return
     name = getPlace(node)
@@ -250,13 +270,15 @@ def freeIfTemp(node, temp_pool, kind: str = "*") -> None:
     try:
         temp_pool.free(name, kind)
     except Exception:
-        # liberación best-effort
-        pass
+        pass  # best-effort
 
 
-@log_function
+@logFunction(channel="tac")
 def deepPlace(node) -> Tuple[str | None, bool]:
-    """Busca recursivamente un _place ya calculado en hijos (sin volver a visitar)."""
+    """
+    Busca hacia abajo un '_place' ya calculado (sin volver a visitar).
+    Devuelve (place, is_temp). Si no encuentra, (None, False).
+    """
     if node is None:
         return None, False
     p = getattr(node, "_place", None)
@@ -278,9 +300,9 @@ def deepPlace(node) -> Tuple[str | None, bool]:
 # Símbolos / métodos
 # ======================
 
-@log_function
+@logFunction(channel="tac")
 def findFunctionSymbol(scope_manager, name: str):
-    """Busca un símbolo de función (nombre simple o calificado)."""
+    """Busca un símbolo de función por nombre (simple o calificado)."""
     try:
         for sym in scope_manager.allSymbols():
             if sym.category == SymbolCategory.FUNCTION and sym.name == name:
@@ -290,10 +312,10 @@ def findFunctionSymbol(scope_manager, name: str):
     return None
 
 
-@log_function
+@logFunction(channel="tac")
 def lookupMethodInHierarchy(class_handler, method_registry, class_name: str, method_name: str):
     """
-    Busca una firma de método subiendo por la jerarquía de 'class_name'.
+    Busca la firma de un método subiendo por la jerarquía de 'class_name'.
     Devuelve (owner, signature) o (None, None).
     """
     try:
@@ -321,32 +343,17 @@ def lookupMethodInHierarchy(class_handler, method_registry, class_name: str, met
 # Tipos → clase temporal
 # ======================
 
-@log_function
+@logFunction(channel="tac")
 def typeToTempKind(t) -> str:
-    """Convierte un tipo semántico en clase de temporal del temp_pool."""
+    """
+    Mapea un tipo semántico a la “clase” de temporal del TempPool:
+      - bool    -> "bool"
+      - integer -> "int"
+      - string / class / array / function / null -> "ref"
+      - resto   -> "*"
+    """
     if isinstance(t, BoolType): return "bool"
     if isinstance(t, IntegerType): return "int"
     if isinstance(t, (StringType, ClassType, ArrayType, FunctionType, NullType)):
         return "ref"
-    # por defecto, comodín
     return "*"
-
-
-@log_function
-def newTempFor(temp_pool, t) -> str:
-    """Crea un temporal en temp_pool apropiado para el tipo t."""
-    return temp_pool.newTemp(typeToTempKind(t))
-
-
-def newTemp(*, kind="*", pool=None, v=None):
-    """
-    Crea un temporal. Debes pasar 'pool=' o 'v='.
-    Ejemplos:
-      newTemp(kind="ref", pool=self.v.emitter.temp_pool)
-      newTemp(kind="int",  v=self.v)
-    """
-    if pool is None and v is not None:
-        pool = getattr(getattr(v, "emitter", None), "temp_pool", None)
-    if pool is None:
-        raise RuntimeError("newTemp requiere 'pool=' o 'v=' (no llames newTemp(\"*\"))")
-    return pool.newTemp(kind)
