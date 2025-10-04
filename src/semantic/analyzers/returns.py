@@ -1,29 +1,61 @@
-from semantic.custom_types import VoidType
+from semantic.custom_types import VoidType, ErrorType
 from semantic.errors import SemanticError
 from semantic.type_system import isAssignable
-from logs.logger_semantic import log_semantic, log_function
+from logs.logger import log, logFunction
+
 
 class ReturnsAnalyzer:
-    @log_function
+    """
+    Valida el uso de `return` en contexto semántico (sin emitir TAC).
+
+    Reglas:
+      - `return` debe estar dentro de una función.
+      - En funciones `void`, no se permite `return <expr>`.
+      - En funciones no-void, `return` debe tener expresión y
+        el tipo del valor debe ser asignable al tipo de retorno esperado.
+
+    Notas:
+      - Para evaluar el tipo de la expresión de retorno sin generar TAC,
+        se usa una *barrera* temporal en el emitter (si existe).
+    """
+
+    @logFunction(channel="semantic")
     def __init__(self, v):
-        log_semantic("===== [Returns.py] Inicio =====")
+        log("===== [returns.py] Inicio (SEMÁNTICO) =====", channel="semantic")
         self.v = v
 
-    @log_function
+    @logFunction(channel="semantic")
+    def typeOfSilent(self, expr_ctx):
+        """
+        Devuelve el tipo de `expr_ctx` sin generar TAC
+        (activa una barrera temporal en el emitter si está presente).
+        """
+        if expr_ctx is None:
+            return ErrorType()
+        old_barrier = getattr(self.v, "emitter", None).flow_terminated if hasattr(self.v, "emitter") else None
+        if hasattr(self.v, "emitter"):
+            self.v.emitter.flow_terminated = True
+        try:
+            t = self.v.visit(expr_ctx)
+        finally:
+            if hasattr(self.v, "emitter"):
+                self.v.emitter.flow_terminated = old_barrier
+                try:
+                    self.v.emitter.temp_pool.resetPerStatement()
+                except Exception:
+                    pass
+        return t
+
+    @logFunction(channel="semantic")
     def visitReturnStatement(self, ctx):
         """
-        Semántica:
-          - Verifica que 'return' esté dentro de una función.
-          - Chequea valor vs tipo de retorno esperado.
-        TAC:
-          - Emite 'return' o 'return <place>'.
-          - Activa barrera de emisión vía endFunctionWithReturn.
+        Chequea semánticamente un `return`:
+        ubicación válida y compatibilidad de tipo con el retorno esperado.
         """
-        log_semantic(f"[visitReturnStatement] Revisando 'return' en línea {ctx.start.line}")
+        log(f"[SEM][return] línea={ctx.start.line}", channel="semantic")
 
-        # --- 1) Return fuera de función ---
-        if not self.v.fn_stack:
-            log_semantic("Return fuera de función detectado")
+        # 1) 'return' fuera de función
+        if not getattr(self.v, "fn_stack", None):
             self.v.appendErr(SemanticError(
                 "'return' fuera de una función.",
                 line=ctx.start.line, column=ctx.start.column))
@@ -33,58 +65,34 @@ class ReturnsAnalyzer:
 
         expected = self.v.fn_stack[-1]
         has_expr = ctx.expression() is not None
-        log_semantic(f"Tipo de retorno esperado: {expected}, expresión presente: {has_expr}")
+        log(f"[SEM][return] esperado={expected}, con_expr={has_expr}", channel="semantic")
 
-        # --- 2) Función 'void' ---
+        # 2) Función void
         if isinstance(expected, VoidType):
             if has_expr:
-                log_semantic("Error: función void retornando valor")
                 self.v.appendErr(SemanticError(
                     "La función 'void' no debe retornar un valor.",
                     line=ctx.start.line, column=ctx.start.column))
-            log_semantic("Emitir TAC: return sin valor")
-            self.v.emitter.endFunctionWithReturn(None)
             self.v.stmt_just_terminated = "return"
             self.v.stmt_just_terminator_node = ctx
             return {"terminated": True, "reason": "return"}
 
-        # --- 3) Función no-void: se espera valor ---
+        # 3) Función no-void sin expresión
         if not has_expr:
-            log_semantic("Error: función no-void sin valor de retorno")
             self.v.appendErr(SemanticError(
                 "Se esperaba un valor en 'return'.",
                 line=ctx.start.line, column=ctx.start.column))
-            log_semantic("Emitir TAC: return sin valor (forzado)")
-            self.v.emitter.endFunctionWithReturn(None)
             self.v.stmt_just_terminated = "return"
             self.v.stmt_just_terminator_node = ctx
             return {"terminated": True, "reason": "return"}
 
-        # Evaluar expresión de retorno
-        value_t = self.v.visit(ctx.expression())
-        log_semantic(f"Tipo de valor de retorno evaluado: {value_t}")
-
-        # Chequeo de asignabilidad del tipo
+        # 4) Evaluar tipo de la expresión sin TAC
+        value_t = self.typeOfSilent(ctx.expression())
         if not isAssignable(expected, value_t):
-            log_semantic(f"Error: tipo incompatible {value_t} no asignable a {expected}")
             self.v.appendErr(SemanticError(
                 f"Tipo de retorno incompatible: no se puede asignar {value_t} a {expected}.",
                 line=ctx.start.line, column=ctx.start.column))
 
-        # Obtener el 'place' del valor para el TAC
-        place, _ = self.v.exprs.deepPlace(ctx.expression())
-        ret_place = place or ctx.expression().getText()
-        log_semantic(f"Emitir TAC: return {ret_place}")
-        self.v.emitter.endFunctionWithReturn(ret_place)
-
-        # Liberar temporal si aplica (best-effort)
-        try:
-            self.v.exprs.freeIfTemp(ctx.expression(), value_t)
-        except Exception:
-            log_semantic("No se liberó temporal (excepción atrapada)")
-
-        # Marcar terminación de flujo
         self.v.stmt_just_terminated = "return"
         self.v.stmt_just_terminator_node = ctx
-        log_semantic("Return procesado, flujo marcado como terminado")
         return {"terminated": True, "reason": "return"}

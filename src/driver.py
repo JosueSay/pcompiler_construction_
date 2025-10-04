@@ -1,17 +1,25 @@
 import sys, os, time
+from datetime import datetime
 from antlr4 import *
 from antlr_gen.CompiscriptLexer import CompiscriptLexer
 from antlr_gen.CompiscriptParser import CompiscriptParser
+
 from semantic.visitor import VisitorCPS
-from logs.logger_semantic import start_run, log_semantic, current_out_dir
-from logs.reporters import write_symbols_log, write_ast_text, write_ast_html
+
+# Logger & reports (nueva API)
+from logs.logger import startRun, log, currentOutDir
+from logs.reports import writeSymbolsLog, writeAstText, writeAstHtml
+
+# IR / TAC
 from ir.emitter import Emitter
-from datetime import datetime
+from ir.tac_generator import TacGenerator
+
 
 def outputStem(src_path: str) -> str:
     ts: str = datetime.now().strftime("%Y%m%d-%H%M%S")
     base: str = os.path.basename(src_path)
     return f"{ts}_{base}"
+
 
 def main(argv: list[str]) -> None:
     # Colores
@@ -29,47 +37,74 @@ def main(argv: list[str]) -> None:
 
     src: str = argv[1]
     stem: str = outputStem(src)
-    start_run(stem)
+    startRun(stem) 
 
-    input_stream: InputStream = FileStream(src, encoding="utf-8")
-    lexer: CompiscriptLexer = CompiscriptLexer(input_stream)
-    tokens: CommonTokenStream = CommonTokenStream(lexer)
-    parser: CompiscriptParser = CompiscriptParser(tokens)
-
-    print(f"{CYAN}{'='*60*2}{RESET}")
+    print(f"{CYAN}{'='*120}{RESET}")
     print(f"{MAGENTA}Ejecutando con archivo:{RESET} {BOLD}{src}{RESET}")
 
-    t0: float = time.perf_counter()
+    # ---------- Fase léxica ----------
+    input_stream: InputStream = FileStream(src, encoding="utf-8")
+    t_lex0: float = time.perf_counter()
+    lexer: CompiscriptLexer = CompiscriptLexer(input_stream)
+    tokens: CommonTokenStream = CommonTokenStream(lexer)
+    tokens.fill()  # fuerza tokenización completa
+    t_lex1: float = time.perf_counter()
+
+    # ---------- Fase sintáctica ----------
+    t_syn0: float = time.perf_counter()
+    parser: CompiscriptParser = CompiscriptParser(tokens)
     tree = parser.program()
-    emitter: Emitter = Emitter(program_name=stem)
-    visitor: VisitorCPS = VisitorCPS(emitter)
-    visitor.visit(tree)
-    t1: float = time.perf_counter()
+    t_syn1: float = time.perf_counter()
 
-    # Reportes
-    write_symbols_log(visitor.scopeManager.allSymbols(), stem)
-    write_ast_text(tree, stem)
-    write_ast_html(tree, stem)
+    # ---------- Fase semántica ----------
+    t_sem0: float = time.perf_counter()
+    emitter_sem: Emitter = Emitter(program_name=f"{stem}_sem")
+    visitor_sem: VisitorCPS = VisitorCPS(emitter_sem)
+    visitor_sem.visit(tree)
+    t_sem1: float = time.perf_counter()
 
-    # TAC en la carpeta de la corrida
-    out_dir: str = current_out_dir()
-    tac_txt: str = visitor.emitter.writeTacText(out_dir, stem, simple_names=True)
-    tac_html: str = visitor.emitter.writeTacHtml(out_dir, stem, simple_names=True)
+    # ---------- Fase TAC (segunda pasada, solo emisión) ----------
+    t_tac0: float = time.perf_counter()
+    emitter_tac: Emitter = Emitter(program_name=stem)
+    tac_gen: TacGenerator = TacGenerator(visitor_sem, emitter_tac)
+    tac_gen.visit(tree)
+    t_tac1: float = time.perf_counter()
 
-    log_semantic(f"[TAC] escrito: {tac_txt}", force=True)
-    log_semantic(f"[TAC] escrito: {tac_html}", force=True)
+    # ---------- Reportes ----------
+    writeSymbolsLog(visitor_sem.scopeManager.allSymbols(), stem)
+    writeAstText(tree, stem)
+    writeAstHtml(tree, stem)
 
-    # Errores
-    if getattr(visitor, "errors", None):
+    out_dir: str = currentOutDir()
+    tac_txt: str = tac_gen.emitter.writeTacText(out_dir, stem, simple_names=True)
+    tac_html: str = tac_gen.emitter.writeTacHtml(out_dir, stem, simple_names=True)
+
+    log(f"[TAC] escrito: {tac_txt}", channel="semantic", force=True)
+    log(f"[TAC] escrito: {tac_html}", channel="semantic", force=True)
+
+    # ---------- Errores ----------
+    if getattr(visitor_sem, "errors", None):
         print(f"{RED}{BOLD}Errores semánticos:{RESET}")
-        for e in visitor.errors:
+        for e in visitor_sem.errors:
             print(f"{RED}\t- {e}{RESET}")
 
-    # Mensajes finales
-    print(f"{GREEN}{BOLD}Tiempo total:{RESET} {t1 - t0:.3f}s")
-    print(f"{CYAN}{BOLD}OUT DIR:{RESET} {out_dir}")
-    print(f"{CYAN}{'='*60*2}{RESET}")
+    # ---------- Tiempos ----------
+    dt_lex = t_lex1 - t_lex0
+    dt_syn = t_syn1 - t_syn0
+    dt_sem = t_sem1 - t_sem0
+    dt_tac = t_tac1 - t_tac0
+    dt_tot = dt_lex + dt_syn + dt_sem + dt_tac
 
-    
+    print(f"{GREEN}{BOLD}Tiempos:{RESET}")
+    print(f"\t{CYAN}Léxica:     {RESET}{dt_lex:.3f}s")
+    print(f"\t{CYAN}Sintáctica: {RESET}{dt_syn:.3f}s")
+    print(f"\t{CYAN}Semántica:  {RESET}{dt_sem:.3f}s")
+    print(f"\t{CYAN}TAC:        {RESET}{dt_tac:.3f}s")
+    print(f"{GREEN}{BOLD}Tiempo total:{RESET} {dt_tot:.3f}s")
+
+    print(f"{CYAN}{BOLD}OUT DIR:{RESET} {out_dir}")
+    print(f"{CYAN}{'='*120}{RESET}")
+
+
 if __name__ == "__main__":
     main(sys.argv)

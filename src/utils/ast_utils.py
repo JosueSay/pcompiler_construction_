@@ -35,7 +35,6 @@ def safeAttr(ctx: Any, name: str) -> Any:
     return maybeCall(val)
 
 
-@logFunction(channel="tac")
 def walk(node) -> Iterable[Any]:
     """DFS robusto sobre el árbol ANTLR (tolera nodos sin getChildren)."""
     try:
