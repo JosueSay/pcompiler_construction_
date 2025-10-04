@@ -264,11 +264,12 @@ class TacControlFlow:
             self.v.visit(init)
 
         l_start = self.v.emitter.newLabel("Lstart")
-        l_body = self.v.emitter.newLabel("Lbody")
-        l_end = self.v.emitter.newLabel("Lend")
-        l_step = self.v.emitter.newLabel("Lstep") if step is not None else l_start
+        l_body  = self.v.emitter.newLabel("Lbody")
+        l_end   = self.v.emitter.newLabel("Lend")
+        l_step  = self.v.emitter.newLabel("Lstep") if step is not None else l_start
 
-        self.loop_ctx_stack.append({"break": l_end, "continue": l_step})
+        # 🔧 registrar si alguien usa 'continue' hacia el step
+        self.loop_ctx_stack.append({"break": l_end, "continue": l_step, "has_continue": False})
         self.v.loop_depth += 1
 
         self.v.emitter.emitLabel(l_start)
@@ -282,7 +283,9 @@ class TacControlFlow:
             self.v.visit(body)
 
         if step is not None:
-            self.v.emitter.emitLabel(l_step)
+            # 🔧 sólo etiqueta si hay 'continue' real hacia el step
+            if self.loop_ctx_stack[-1].get("has_continue"):
+                self.v.emitter.emitLabel(l_step)
             self.emitForStep(step)
 
         self.v.emitter.emitGoto(l_start)
@@ -290,7 +293,6 @@ class TacControlFlow:
         self.v.emitter.clearFlowTermination()
         self.loop_ctx_stack.pop()
         self.v.loop_depth -= 1
-
         return {"terminated": False, "reason": None}
 
     # ---------------- switch ----------------
@@ -420,9 +422,11 @@ class TacControlFlow:
         if target is None:
             return {"terminated": False, "reason": None}
 
+        if self.loop_ctx_stack:
+            self.loop_ctx_stack[-1]["has_continue"] = True
+
         self.v.emitter.emitGoto(target)
         self.v.emitter.markFlowTerminated()
-
         self.v.stmt_just_terminated = "continue"
         self.v.stmt_just_terminator_node = ctx
         return {"terminated": True, "reason": "continue"}

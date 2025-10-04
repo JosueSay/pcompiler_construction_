@@ -56,11 +56,13 @@ class TacGenerator(CompiscriptVisitor):
         for st in ctx.statement():
             cd = st.classDeclaration() if hasattr(st, "classDeclaration") else None
             fd = st.functionDeclaration() if hasattr(st, "functionDeclaration") else None
+
             if cd:
                 self.visitClassDeclaration(cd)
             elif fd:
                 self.visitFunctionDeclaration(fd)
-            # Otros statements toplevel se ignoran en esta pasada.
+            else:
+                self.visit(st)
 
         return None
 
