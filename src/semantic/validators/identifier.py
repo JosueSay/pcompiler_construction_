@@ -1,26 +1,49 @@
+from __future__ import annotations
+
+from typing import Any, Mapping
 from semantic.custom_types import ErrorType
 from semantic.errors import SemanticError
-from logs.logger_semantic import log_semantic
+from logs.logger import log, logFunction
 
-def validateIdentifier(name, symbol_table, error_list, ctx=None):
+
+@logFunction
+def validateIdentifier(
+    name: str,
+    symbol_table: Mapping[str, Any],
+    error_list: list[SemanticError],
+    ctx: Any | None = None,
+):
     """
-    Valida el uso de un identificador en una tabla plana (modo auxiliar).
+    Verifica que un identificador exista en la “tabla plana” de símbolos y
+    devuelve su tipo. Si no existe, registra un SemanticError y retorna ErrorType.
+
+    Parámetros:
+      - name: nombre del identificador a validar.
+      - symbol_table: mapeo nombre → símbolo. Se espera que cada símbolo tenga
+        al menos el atributo `type`.
+      - error_list: lista mutable donde se acumulan errores semánticos.
+      - ctx: (opcional) nodo del parser para extraer línea/columna.
+
+    Retorna:
+      - `symbol.type` si el identificador está declarado.
+      - `ErrorType()` si no lo está (y se agrega el error a `error_list`).
     """
-    log_semantic(f"Validating identifier: {name}")
+    log(f"Validating identifier: {name}", channel="semantic")
 
     symbol = symbol_table.get(name)
 
     if not symbol:
-        line = ctx.start.line if ctx else None
-        column = ctx.start.column if ctx else None
+        line = getattr(getattr(ctx, "start", None), "line", None) if ctx else None
+        column = getattr(getattr(ctx, "start", None), "column", None) if ctx else None
         error = SemanticError(
             message=f"Uso de variable no declarada: '{name}'",
             line=line,
-            column=column
+            column=column,
         )
-        log_semantic(f"ERROR: {error}")
+        log(f"ERROR: {error}", channel="semantic")
         error_list.append(error)
         return ErrorType()
 
-    log_semantic(f"Identifier '{name}' resolved with type: {symbol.type}")
-    return symbol.type
+    sym_type = getattr(symbol, "type", ErrorType())
+    log(f"Identifier '{name}' resolved with type: {sym_type}", channel="semantic")
+    return sym_type

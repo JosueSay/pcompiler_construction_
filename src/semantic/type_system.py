@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from semantic.custom_types import (
     IntegerType,
     StringType,
@@ -9,40 +11,69 @@ from semantic.custom_types import (
     VoidType,
 )
 
-# Tamaños de tipos básicos (bytes)
-TYPE_SIZES = {
+
+# ---------------- Anchos (bytes) ----------------
+
+# Tamaños de tipos básicos (en bytes). Las referencias (string/class/array) se tratan como punteros.
+TYPE_SIZES: dict[type, int] = {
     IntegerType: 4,
     BoolType: 1,
-    StringType: 8,   # tratado como puntero
-    ClassType: 8,
-    ArrayType: 8,
+    StringType: 8,   # referencia/puntero
+    ClassType: 8,    # referencia/puntero
+    ArrayType: 8,    # referencia/puntero
     NullType: 0,     # sin espacio propio
-    VoidType: 0,
+    VoidType: 0,     # solo válido como retorno
 }
 
-def getTypeWidth(typeInstance):
-    """Retorna el tamaño en bytes de una instancia de tipo semántico."""
+
+def getTypeWidth(type_instance) -> int:
+    """
+    Devuelve el tamaño en bytes de una **instancia** de tipo semántico.
+
+    Notas:
+    - Para referencias (string, class, array) se devuelve el tamaño del puntero.
+    - `NullType` y `VoidType` ocupan 0 bytes.
+    """
     for cls, size in TYPE_SIZES.items():
-        if isinstance(typeInstance, cls):
+        if isinstance(type_instance, cls):
             return size
     return 0
 
-# Predicados de categorías
-def isNumeric(t): 
-    # sin float: numérico == integer
+
+# ---------------- Predicados de categoría ----------------
+
+def isNumeric(t) -> bool:
+    """Numérico (por ahora) ≡ `integer`."""
     return isinstance(t, IntegerType)
 
-def isBoolean(t): 
+
+def isBoolean(t) -> bool:
+    """Booleano (`true`/`false`)."""
     return isinstance(t, BoolType)
 
-def isReferenceType(t):
-    """Referencia == admite null. Por ahora: string, class, array."""
+
+def isReferenceType(t) -> bool:
+    """
+    True si el tipo es de **referencia** (admite `null`):
+    string, class o array.
+    """
     return isinstance(t, (StringType, ClassType, ArrayType))
 
-# Asignabilidad
-def isAssignable(target_type, value_type):
+
+# ---------------- Asignabilidad ----------------
+
+def isAssignable(target_type, value_type) -> bool:
+    """
+    Reglas de asignación `target_type <- value_type`.
+
+    - Corta la cascada si `value_type` es `ErrorType` (devuelve True).
+    - `null` es asignable a cualquier tipo de referencia.
+    - Arrays: requieren asignabilidad recursiva de sus elementos.
+    - Clases: debe coincidir el nombre (no hay subtipado estructural aquí).
+    - Resto: deben ser exactamente el mismo tipo.
+    """
     if isinstance(value_type, ErrorType):
-        return True  # evitar cascada
+        return True  # evita cascada de errores
 
     if isinstance(value_type, NullType) and isReferenceType(target_type):
         return True
@@ -51,40 +82,64 @@ def isAssignable(target_type, value_type):
         return isAssignable(target_type.elem_type, value_type.elem_type)
 
     if isinstance(target_type, ClassType) and isinstance(value_type, ClassType):
-        return target_type == value_type  # usa __eq__ por nombre
+        # Usa __eq__ de ClassType (nombre)
+        return target_type == value_type
 
+    # Tipos básicos: igualdad estricta de clase
     return type(target_type) is type(value_type)
 
-# Reglas de resultados por operación (solo integer/string)
-def resultArithmetic(t1, t2, op):
+
+# ---------------- Resultados de operaciones ----------------
+
+def resultArithmetic(t1, t2, op: str):
+    """
+    Resultado de operaciones aritméticas/suma.
+
+    Reglas:
+    - `string + string` → `string` (concatenación).
+    - `integer (+,-,*,/) integer` → `integer`.
+    - Cualquier otro caso → `ErrorType`.
+    """
     if isinstance(t1, ErrorType) or isinstance(t2, ErrorType):
         return ErrorType()
 
-    # concatenación de strings con '+'
     if op == '+' and isinstance(t1, StringType) and isinstance(t2, StringType):
         return StringType()
 
-    # aritmética entera
     if isinstance(t1, IntegerType) and isinstance(t2, IntegerType):
         return IntegerType()
 
     return ErrorType()
 
+
 def resultModulo(t1, t2):
+    """Resultado de `t1 % t2`: solo definido para `integer % integer`."""
     if isinstance(t1, ErrorType) or isinstance(t2, ErrorType):
         return ErrorType()
     if isinstance(t1, IntegerType) and isinstance(t2, IntegerType):
         return IntegerType()
     return ErrorType()
 
+
 def resultRelational(t1, t2):
+    """
+    Resultado de relacionales (`<`, `>`, `<=`, `>=`):
+    requiere numéricos a ambos lados → `boolean`.
+    """
     if isinstance(t1, ErrorType) or isinstance(t2, ErrorType):
         return ErrorType()
     if isNumeric(t1) and isNumeric(t2):
         return BoolType()
     return ErrorType()
 
+
 def resultEquality(t1, t2):
+    """
+    Resultado de igualdad/desigualdad (`==`, `!=`):
+    - Mismo tipo → `boolean`.
+    - `ref == null` o `null == ref` → `boolean`.
+    - Otro caso → `ErrorType`.
+    """
     if isinstance(t1, ErrorType) or isinstance(t2, ErrorType):
         return ErrorType()
     if type(t1) is type(t2):
@@ -93,33 +148,51 @@ def resultEquality(t1, t2):
         return BoolType()
     return ErrorType()
 
+
 def resultLogical(t1, t2):
+    """Resultado de `&&` / `||`: requiere booleanos → `boolean`."""
     if isinstance(t1, ErrorType) or isinstance(t2, ErrorType):
         return ErrorType()
     if isBoolean(t1) and isBoolean(t2):
         return BoolType()
     return ErrorType()
 
+
 def resultUnaryMinus(t):
+    """Resultado de `-x`: solo para numéricos (integer)."""
     if isinstance(t, ErrorType):
         return ErrorType()
-    if isNumeric(t):   # ahora solo integer
+    if isNumeric(t):
         return t
     return ErrorType()
 
+
 def resultUnaryNot(t):
+    """Resultado de `!x`: solo para `boolean`."""
     if isinstance(t, ErrorType):
         return ErrorType()
     if isBoolean(t):
         return t
     return ErrorType()
 
-# Resolución de anotación de tipos
-def resolveAnnotatedType(typeAnnotationCtx):
+
+# ---------------- Resolución de anotaciones ----------------
+
+def resolveAnnotatedType(type_annotation_ctx):
     """
-    Convierte la anotación de tipo del parser a una instancia de tipo semántico.
+    Convierte una anotación de tipo del parser a una **instancia** de tipo semántico.
+
+    Soporta sufijos `[]` (arrays) sobre:
+      - `integer`, `boolean`, `string`, `void`
+      - identificadores de clase (se crean como `ClassType(name)`)
+
+    Ejemplos:
+      "integer"      -> IntegerType()
+      "string[]"     -> ArrayType(StringType())
+      "Foo[][]"      -> ArrayType(ArrayType(ClassType("Foo")))
+      "void"         -> VoidType()
     """
-    ttxt = typeAnnotationCtx.type_().getText() if typeAnnotationCtx else None
+    ttxt = type_annotation_ctx.type_().getText() if type_annotation_ctx else None
     if ttxt is None:
         return None
 
@@ -139,7 +212,7 @@ def resolveAnnotatedType(typeAnnotationCtx):
     elif base_txt == "void":
         base = VoidType()
     else:
-        # 'float' ya NO se reconoce como primitivo; caerá como ClassType
+        # No hay float aquí: identificadores desconocidos se tratan como clases
         base = ClassType(base_txt)
 
     ty = base
