@@ -93,14 +93,18 @@ class Quad:
             return None
 
         if o is Op.CALL:
-            if self.res:
-                return f"CALL {self.arg1}\n{self.res} := R"
-            return f"CALL {self.arg1}"
+            head = f"CALL, {self.arg1}"
+            if self.res and str(self.res).startswith("t"):
+                return f"{head}\n{self.res} := R"
+            return head
+
 
         if o is Op.CALLC:
-            if self.res:
-                return f"CALLC {self.arg1}\n{self.res} := R"
-            return f"CALLC {self.arg1}"
+            head = f"CALLC, {self.arg1}"
+            if self.res and str(self.res).startswith("t"):
+                return f"{head}\n{self.res} := R"
+            return head
+
 
 
         if o is Op.ASSIGN:

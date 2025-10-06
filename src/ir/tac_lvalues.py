@@ -3,7 +3,8 @@ from semantic.custom_types import ArrayType, ErrorType, FunctionType, ClassType,
 from logs.logger import log, logFunction
 from utils.ast_utils import getPlace, setPlace, deepPlace, typeToTempKind
 from ir.tac import Op
-
+from ir.addr_format import place_of_symbol
+from semantic.symbol_kinds import SymbolCategory
 
 class TacLValues:
     """
@@ -15,6 +16,17 @@ class TacLValues:
     Procesa suffixOp en orden izquierda→derecha y prepara correctamente el
     “método enlazado” (receiver + label) antes del CallExpr.
     """
+
+    def __init__(self, v):
+        """
+        Inicializa el generador de TAC para LValues.
+        :param v: Visitador/contexto que contiene emitter, scopeManager, etc.
+        """
+        self.v = v
+        log("=" * 60, channel="tac")
+        log("↳ [TacLValues] initialized", channel="tac")
+        log("=" * 60, channel="tac")
+
 
     # --------------------------- util interno ----------------------------
     def _sym_type(self, name: str):
@@ -32,16 +44,8 @@ class TacLValues:
                 return t
         return None
 
-    # --------------------------------------------------------------------
-
-    @logFunction(channel="tac")
-    def __init__(self, v):
-        log("[tac_lvalues] init", channel="tac")
-        self.v = v
-
-    @logFunction(channel="tac")
     def visitLeftHandSide(self, ctx: CompiscriptParser.LeftHandSideContext):
-        log(f"[lvalues][TAC] enter LHS: '{ctx.getText()}'", channel="tac")
+        log(f"\t[TAC_LVALUES] enter LHS: '{ctx.getText()}'", channel="tac")
 
         # 1) Átomo base
         base_node = ctx.primaryAtom()
@@ -49,6 +53,31 @@ class TacLValues:
         p0, is_tmp0 = deepPlace(base_node)
         base_place = p0 or base_node.getText()
         base_is_temp = bool(is_tmp0)
+
+        log(f"\t[TAC_LVALUES] base_node: place={base_place}, is_temp={base_is_temp}", channel="tac")
+
+        
+        try:
+            base_txt = base_node.getText()
+        except Exception:
+            base_txt = base_place
+
+        if (
+            base_place == base_txt
+            and isinstance(base_txt, str)
+            and base_txt not in ("this",)
+            and "." not in base_txt
+            and "[" not in base_txt
+        ):
+            try:
+                sym = self.v.scopeManager.lookup(base_txt)
+                if sym is not None and getattr(sym, "category", None) != SymbolCategory.FUNCTION:
+                    addr = place_of_symbol(sym)
+                    base_place = addr
+                    base_is_temp = False
+                    setPlace(base_node, addr, False)
+            except Exception:
+                pass
 
         # 2) Tipo base (de semántica / símbolos)
         base_type = getattr(base_node, "_type", None)
@@ -89,6 +118,7 @@ class TacLValues:
                 if isinstance(base_type, ErrorType):
                     continue
 
+                log(f"\t[TAC_LVALUES] IndexExpr: base={base_place}", channel="tac")
                 idx_expr = suf.expression()
                 self.v.visit(idx_expr)
                 p_idx, is_idx_tmp = deepPlace(idx_expr)
@@ -123,6 +153,7 @@ class TacLValues:
                 if isinstance(base_type, ErrorType):
                     continue
 
+                log(f"\t[TAC_LVALUES] CallExpr: base={base_place}", channel="tac")
                 # Evalúa argumentos
                 args_nodes = list(suf.arguments().expression()) if suf.arguments() else []
                 for e in args_nodes:
@@ -202,11 +233,14 @@ class TacLValues:
                     self.v.emitter.temp_pool.free(recv_place, "*")
 
                 base_type = ret_t
+                
+                log(f"\t[TAC_LVALUES] CallExpr result: place={base_place}", channel="tac")
                 continue
 
             # 3.c) Acceso a propiedad: campo o método enlazado
             if isinstance(suf, CompiscriptParser.PropertyAccessExprContext):
                 prop_name = suf.Identifier().getText()
+                log(f"\t[TAC_LVALUES] PropertyAccessExpr: {prop_name} on base={base_place}", channel="tac")
 
                 # Campo de clase → FIELD_LOAD
                 attr_t = None
@@ -281,9 +315,10 @@ class TacLValues:
                     continue
 
                 # Ni atributo ni método: ya reportado por semántica
+                log(f"\t[TAC_LVALUES] PropertyAccessExpr result: place={base_place}", channel="tac")
                 continue
 
         # 4) Place final
         setPlace(ctx, base_place, base_is_temp)
-        log(f"[lvalues][TAC] exit LHS: type={base_type}, place={base_place}", channel="tac")
+        log(f"\t[TAC_LVALUES] exit LHS: type={base_type}, place={base_place}", channel="tac")
         return base_type

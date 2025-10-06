@@ -13,21 +13,35 @@ from utils.ast_utils import (
 class TacControlFlow:
     """
     Control de flujo para la pasada TAC (sin validaciones semánticas).
-    Este visitor asume que la fase semántica ya resolvió tipos y símbolos.
 
-    Requisitos sobre `self.v` (visitor padre):
-      - emitter:     objeto con primitivas de emisión de TAC
-      - visit(node): despacha a los sub-visitors TAC
-      - loop_depth:  entero que llevamos como contador de anidamiento
-      - stmt_just_terminated / stmt_just_terminator_node: marcas de barrera de flujo
+    Supuestos:
+      - La semántica ya resolvió tipos y símbolos.
+      - `self.v` tiene:
+        - emitter: primitivas TAC
+        - visit(node): despache a sub-visitors
+        - loop_depth: contador de anidamiento
+        - stmt_just_terminated / stmt_just_terminator_node: barreras de flujo
+
+    Stack internos:
+      - loop_ctx_stack  : manejo de 'break'/'continue'
+      - switch_ctx_stack: manejo de 'switch/case/default'
+      - while_seq       : contador interno para while
     """
 
+    
     def __init__(self, v):
-        log("===== [tac_control_flow] start =====", channel="tac")
+        log("\n" + "="*80, channel="tac")
+        log("[TAC_CONTROL_FLOW] Init TacControlFlow", channel="tac")
+        log("="*80 + "\n", channel="tac")
+
         self.v = v
         self.loop_ctx_stack: list[dict[str, str]] = []
         self.switch_ctx_stack: list[dict[str, str]] = []
         self.while_seq: int = -1
+
+        log(f"[TAC_CONTROL_FLOW] loop_ctx_stack initialized: {self.loop_ctx_stack}", channel="tac")
+        log(f"[TAC_CONTROL_FLOW] switch_ctx_stack initialized: {self.switch_ctx_stack}", channel="tac")
+        log(f"[TAC_CONTROL_FLOW] while_seq initialized: {self.while_seq}\n", channel="tac")
 
     def unwrapCondCore(self, n):
         # expression -> assignmentExpr -> conditionalExpr -> logicalOrExpr
@@ -41,132 +55,179 @@ class TacControlFlow:
             return n.logicalOrExpr() or n
         return n
 
-
     # ---------------- Condiciones compuestas ----------------
 
-    @logFunction(channel="tac")
+    
     def visitCond(self, expr_ctx, l_true: str, l_false: str) -> None:
         """
-        Emite saltos con cortocircuito:
+        Emite TAC para condiciones con cortocircuito:
+
+        Reglas:
           - !E        → invierte destinos
-          - A || B .. → evalúa izquierda→derecha, si true salta a Ltrue
-          - A && B .. → evalúa izquierda→derecha, si false salta a Lfalse
+          - A || B .. → evalúa izquierda→derecha; si true salta a Ltrue
+          - A && B .. → evalúa izquierda→derecha; si false salta a Lfalse
           - Base      → IF cond GOTO Ltrue ; GOTO Lfalse
+
+        Args:
+            expr_ctx : nodo ANTLR de la expresión
+            l_true   : label de salto si la condición es verdadera
+            l_false  : label de salto si la condición es falsa
         """
-        # 0) Manejo de negación unaria en cualquier profundidad razonable.
+        # --- 0) Manejo de negación ---
         neg_inner = extractNotInner(expr_ctx)
         if neg_inner is not None:
+            log(f"\n[TAC][Cond] Negation found, invert Ltrue/Lfalse -> {l_true}/{l_false}", channel="tac")
             self.visitCond(neg_inner, l_false, l_true)
             return
 
         node = self.unwrapCondCore(expr_ctx)
 
-        # 1) OR: logicalOrExpr ::= logicalAndExpr ('||' logicalAndExpr)*
+        # --- 1) OR ---
         OrCtx = getattr(CompiscriptParser, "LogicalOrExprContext", None)
         if OrCtx is not None and isinstance(node, OrCtx):
             and_terms = list(node.logicalAndExpr() or [])
+            log(f"\n[TAC][Cond] OR condition: terms={len(and_terms)}, node={node.getText()}", channel="tac")
+
             if len(and_terms) <= 1:
-                # Sin '||' real → caso base
-                # Materializar la condición en TAC de expresiones para obtener un temporal
                 self.v.visit(node)
                 p, _ = deepPlace(node)
                 cond_place = p or node.getText()
-
-                # Usar forma 'IF t > 0' como en el video
+                log(f"\t[TAC][Cond][OR] Single term -> IF {cond_place}>0 GOTO {l_true}; GOTO {l_false}", channel="tac")
                 self.v.emitter.emitIfGoto(f"{cond_place} > 0", l_true)
                 self.v.emitter.emitGoto(l_false)
-
                 return
 
-            # A || B || C ...  → if A goto Ltrue; else evalúa resto
-            # Vamos encadenando labels intermedios para continuar.
+            # A || B || C ... → encadenar labels intermedios
             next_label = None
             for k, term in enumerate(and_terms):
                 is_last = (k == len(and_terms) - 1)
                 if is_last:
-                    # Último: decide definitivamente
+                    log(f"\t[TAC][Cond][OR] Last term -> Ltrue={l_true}, Lfalse={l_false}", channel="tac")
                     self.visitCond(term, l_true, l_false)
                 else:
                     next_label = self.v.emitter.newLabel("Lor")
+                    log(f"\t[TAC][Cond][OR] Intermediate term -> newLabel={next_label}", channel="tac")
                     self.visitCond(term, l_true, next_label)
                     self.v.emitter.emitLabel(next_label)
             return
 
-        # 2) AND: logicalAndExpr ::= equalityExpr ('&&' equalityExpr)*
+        # --- 2) AND ---
         AndCtx = getattr(CompiscriptParser, "LogicalAndExprContext", None)
         if AndCtx is not None and isinstance(node, AndCtx):
             eq_terms = list(node.equalityExpr() or [])
+            log(f"\n[TAC][Cond] AND condition: terms={len(eq_terms)}, node={node.getText()}", channel="tac")
+
             if len(eq_terms) <= 1:
-                self.v.emitter.emitIfGoto(node.getText(), l_true)
+                self.v.visit(node)
+                p, _ = deepPlace(node)
+                cond_place = p or node.getText()
+                log(f"\t[TAC][Cond][AND] Single term -> IF {cond_place}>0 GOTO {l_true}; GOTO {l_false}", channel="tac")
+                self.v.emitter.emitIfGoto(f"{cond_place} > 0", l_true)
                 self.v.emitter.emitGoto(l_false)
                 return
 
-            # A && B && C ... → si A false salta a Lfalse; si true evalúa resto
+            # A && B && C ... → encadenar labels intermedios
             next_label = None
             for k, term in enumerate(eq_terms):
                 is_last = (k == len(eq_terms) - 1)
                 if is_last:
+                    log(f"\t[TAC][Cond][AND] Last term -> Ltrue={l_true}, Lfalse={l_false}", channel="tac")
                     self.visitCond(term, l_true, l_false)
                 else:
                     next_label = self.v.emitter.newLabel("Land")
+                    log(f"\t[TAC][Cond][AND] Intermediate term -> newLabel={next_label}", channel="tac")
                     self.visitCond(term, next_label, l_false)
                     self.v.emitter.emitLabel(next_label)
             return
 
-        # 3) Caso base: condición como texto (el backend de ejecución la evalúa).
-        self.v.emitter.emitIfGoto(node.getText(), l_true)
+        # --- 3) Caso base ---
+        self.v.visit(node)
+        p, _ = deepPlace(node)
+        cond_place = p or node.getText()
+        log(f"\t[TAC][Cond][BASE] IF {cond_place}>0 GOTO {l_true}; GOTO {l_false}", channel="tac")
+        self.v.emitter.emitIfGoto(f"{cond_place} > 0", l_true)
         self.v.emitter.emitGoto(l_false)
 
     # ---------------- if / else ----------------
 
-    @logFunction(channel="tac")
+    
     def visitIfStatement(self, ctx: CompiscriptParser.IfStatementContext):
+        """
+        Emite TAC para un if / else:
+
+        Estructura:
+          IF cond GOTO Lthen
+          GOTO Lelse
+        Lthen:
+          ... then_stmt ...
+          GOTO Lend (si hay else)
+        Lelse:
+          ... else_stmt ...
+        Lend:
+          flujo continúa
+
+        Retorna dict indicando si el flujo termina dentro del if/else.
+        """
         cond_ctx = firstExpression(ctx)
         if cond_ctx is None:
+            log("\t[TAC][if] No condition found, skipping", channel="tac")
             return {"terminated": False, "reason": None}
 
         stmts = collectStmtOrBlock(ctx)
         then_stmt = stmts[0] if len(stmts) >= 1 else None
         else_stmt = stmts[1] if len(stmts) >= 2 else None
+
         if then_stmt is None:
+            log("\t[TAC][if] No then statement found, skipping", channel="tac")
             return {"terminated": False, "reason": None}
 
+        # --- Labels ---
         l_then = self.v.emitter.newLabel("Lthen")
         l_end = self.v.emitter.newLabel("Lend")
         l_else = self.v.emitter.newLabel("Lelse") if else_stmt is not None else l_end
+        log(f"\n[TAC][if] Labels -> Lthen={l_then}, Lelse={l_else}, Lend={l_end}", channel="tac")
 
+        # --- Condición ---
+        log(f"\t[TAC][if] Visiting condition -> {cond_ctx.getText()}", channel="tac")
         self.visitCond(cond_ctx, l_then, l_else)
 
+        # --- Then block ---
         self.v.emitter.emitLabel(l_then)
+        log(f"\t[TAC][if] Entering THEN block -> {l_then}", channel="tac")
         then_result = self.v.visit(then_stmt) or {"terminated": False, "reason": None}
 
+        # --- Else block ---
         if else_stmt is not None:
             self.v.emitter.emitGoto(l_end)
             self.v.emitter.emitLabel(l_else)
+            log(f"\t[TAC][if] Entering ELSE block -> {l_else}", channel="tac")
             if bool(then_result.get("terminated")):
                 self.v.emitter.clearFlowTermination()
             else_result = self.v.visit(else_stmt) or {"terminated": False, "reason": None}
         else:
             else_result = {"terminated": False, "reason": None}
 
+        # --- End label ---
         self.v.emitter.emitLabel(l_end)
+        log(f"\t[TAC][if] End IF/ELSE -> {l_end}", channel="tac")
+
+        # --- Flujo terminado ---
         both_terminate = bool(then_result.get("terminated") and else_result.get("terminated"))
-
-        if not both_terminate:
-            self.v.emitter.clearFlowTermination()
-
         if both_terminate:
+            log(f"\t[TAC][if] Both THEN and ELSE blocks terminate", channel="tac")
             self.v.stmt_just_terminated = "if-else"
             self.v.stmt_just_terminator_node = ctx
             return {"terminated": True, "reason": "if-else"}
 
+        self.v.emitter.clearFlowTermination()
         self.v.stmt_just_terminated = None
         self.v.stmt_just_terminator_node = None
         return {"terminated": False, "reason": None}
 
+
     # ---------------- while ----------------
 
-    @logFunction(channel="tac")
+    
     def visitWhileStatement(self, ctx: CompiscriptParser.WhileStatementContext):
         cond_ctx = safeAttr(ctx, "expression") or safeAttr(ctx, "cond") or safeAttr(ctx, "condition")
         body = safeAttr(ctx, "statement") or safeAttr(ctx, "body") or safeAttr(ctx, "block")
@@ -177,18 +238,22 @@ class TacControlFlow:
         l_body  = f"LABEL_TRUE_{wid}"
         l_end   = f"ENDWHILE_{wid}"
 
+        log(f"\n[TAC][while] Labels -> start={l_start}, body={l_body}, end={l_end}", channel="tac")
 
         self.loop_ctx_stack.append({"break": l_end, "continue": l_start})
         self.v.loop_depth += 1
 
         self.v.emitter.emitLabel(l_start)
+        log(f"\t[TAC][while] Evaluating condition -> {cond_ctx.getText()}", channel="tac")
         self.visitCond(cond_ctx, l_body, l_end)
 
         self.v.emitter.emitLabel(l_body)
+        log(f"\t[TAC][while] Entering body -> {l_body}", channel="tac")
         self.v.visit(body)
         self.v.emitter.emitGoto(l_start)
 
         self.v.emitter.emitLabel(l_end)
+        log(f"\t[TAC][while] End loop -> {l_end}", channel="tac")
         self.v.emitter.clearFlowTermination()
         self.loop_ctx_stack.pop()
         self.v.loop_depth -= 1
@@ -197,7 +262,7 @@ class TacControlFlow:
 
     # ---------------- do / while ----------------
 
-    @logFunction(channel="tac")
+    
     def visitDoWhileStatement(self, ctx: CompiscriptParser.DoWhileStatementContext):
         body = safeAttr(ctx, "statement") or safeAttr(ctx, "body") or safeAttr(ctx, "block")
         cond_ctx = safeAttr(ctx, "expression") or safeAttr(ctx, "cond") or safeAttr(ctx, "condition")
@@ -206,15 +271,21 @@ class TacControlFlow:
         l_cond = self.v.emitter.newLabel("Lcond")
         l_end = self.v.emitter.newLabel("Lend")
 
+        log(f"\n[TAC][do] Labels -> body={l_body}, cond={l_cond}, end={l_end}", channel="tac")
+
         self.loop_ctx_stack.append({"break": l_end, "continue": l_cond})
         self.v.loop_depth += 1
 
         self.v.emitter.emitLabel(l_body)
+        log(f"\t[TAC][do] Entering body -> {l_body}", channel="tac")
         self.v.visit(body)
+
         self.v.emitter.emitLabel(l_cond)
+        log(f"\t[TAC][do] Evaluating condition -> {cond_ctx.getText()}", channel="tac")
         self.visitCond(cond_ctx, l_body, l_end)
 
         self.v.emitter.emitLabel(l_end)
+        log(f"\t[TAC][do] End loop -> {l_end}", channel="tac")
         self.v.emitter.clearFlowTermination()
         self.loop_ctx_stack.pop()
         self.v.loop_depth -= 1
@@ -223,7 +294,7 @@ class TacControlFlow:
 
     # ---------------- for ----------------
 
-    @logFunction(channel="tac")
+    
     def emitForStep(self, step_ctx):
         if step_ctx is None:
             return
@@ -245,17 +316,16 @@ class TacControlFlow:
         is_assign_like = contains(step_ctx, (AssignCtx, PropAssignCtx))
 
         if is_assign_like:
-            # Usa la bajada de asignaciones de statements (que ya maneja ExpressionContext)
+            log(f"\t[TAC][for] Emitting assignment-like step -> {step_ctx.getText()}", channel="tac")
             self.v.stmts.visitAssignment(step_ctx)
         else:
-            # Efectos colaterales (p.ej., f(), i++)
+            log(f"\t[TAC][for] Emitting effect-only step -> {step_ctx.getText()}", channel="tac")
             self.v.visit(step_ctx)
 
-        # Vida de temporales del “step”
         self.v.emitter.temp_pool.resetPerStatement()
+        log(f"\t[TAC][for] Reset temporals for step", channel="tac")
 
-
-    @logFunction(channel="tac")
+    
     def visitForStatement(self, ctx: CompiscriptParser.ForStatementContext):
         # init
         init = safeAttr(ctx, "forInit") or safeAttr(ctx, "init") or safeAttr(ctx, "initializer")
@@ -302,6 +372,7 @@ class TacControlFlow:
                 cond_ctx = None
 
         if init is not None:
+            log(f"\t[TAC][for] Emitting init -> {init.getText()}", channel="tac")
             self.v.visit(init)
 
         l_start = self.v.emitter.newLabel("Lstart")
@@ -309,28 +380,33 @@ class TacControlFlow:
         l_end   = self.v.emitter.newLabel("Lend")
         l_step  = self.v.emitter.newLabel("Lstep") if step is not None else l_start
 
-        # 🔧 registrar si alguien usa 'continue' hacia el step
+        log(f"\n[TAC][for] Labels -> start={l_start}, body={l_body}, step={l_step}, end={l_end}", channel="tac")
+
         self.loop_ctx_stack.append({"break": l_end, "continue": l_step, "has_continue": False})
         self.v.loop_depth += 1
 
         self.v.emitter.emitLabel(l_start)
         if cond_ctx is None:
+            log(f"\t[TAC][for] No condition, jumping to body -> {l_body}", channel="tac")
             self.v.emitter.emitGoto(l_body)
         else:
+            log(f"\t[TAC][for] Evaluating condition -> {cond_ctx.getText()}", channel="tac")
             self.visitCond(cond_ctx, l_body, l_end)
 
         self.v.emitter.emitLabel(l_body)
+        log(f"\t[TAC][for] Entering body -> {l_body}", channel="tac")
         if body is not None:
             self.v.visit(body)
 
         if step is not None:
-            # 🔧 sólo etiqueta si hay 'continue' real hacia el step
             if self.loop_ctx_stack[-1].get("has_continue"):
                 self.v.emitter.emitLabel(l_step)
             self.emitForStep(step)
 
         self.v.emitter.emitGoto(l_start)
         self.v.emitter.emitLabel(l_end)
+        log(f"\t[TAC][for] End loop -> {l_end}", channel="tac")
+
         self.v.emitter.clearFlowTermination()
         self.loop_ctx_stack.pop()
         self.v.loop_depth -= 1
@@ -338,13 +414,14 @@ class TacControlFlow:
 
     # ---------------- switch ----------------
 
-    @logFunction(channel="tac")
+    
     def visitSwitchStatement(self, ctx):
         discr = firstSwitchDiscriminant(ctx)
         if discr is None:
             return {"terminated": False, "reason": None}
 
         discr_text = discr.getText()
+        log(f"\n[TAC][switch] Discriminant -> {discr_text}", channel="tac")
 
         stmt_ctx = getattr(CompiscriptParser, "StatementContext", None)
         expr_ctx = getattr(CompiscriptParser, "ExpressionContext", None)
@@ -395,7 +472,6 @@ class TacControlFlow:
             elif cname in ("DefaultCaseContext", "DefaultCase"):
                 default_stmts = gatherStatements(ch)
 
-        # fallback por gramáticas más laxas
         if not cases and default_stmts is None:
             exprs = []
             get_exprs = getattr(ctx, "expression", None)
@@ -410,8 +486,11 @@ class TacControlFlow:
         l_def = self.v.emitter.newLabel("Ldef") if default_stmts is not None else l_end
         l_cases = [self.v.emitter.newLabel("Lcase") for _ in cases]
 
+        log(f"\t[TAC][switch] Labels -> end={l_end}, default={l_def}, cases={[lbl for lbl in l_cases]}", channel="tac")
+
         for (case_expr, _), l_case in zip(cases, l_cases):
             cond_text = f"{discr_text} == {case_expr.getText()}"
+            log(f"\t[TAC][switch] if {cond_text} goto {l_case}", channel="tac")
             self.v.emitter.emitIfGoto(cond_text, l_case)
         self.v.emitter.emitGoto(l_def)
 
@@ -420,16 +499,19 @@ class TacControlFlow:
         for (_, st_list), l_case in zip(cases, l_cases):
             self.v.emitter.clearFlowTermination()
             self.v.emitter.emitLabel(l_case)
+            log(f"\t[TAC][switch] Entering case -> {l_case}", channel="tac")
             for st in st_list:
                 self.v.visit(st)
 
         if default_stmts is not None:
             self.v.emitter.clearFlowTermination()
             self.v.emitter.emitLabel(l_def)
+            log(f"\t[TAC][switch] Entering default -> {l_def}", channel="tac")
             for st in default_stmts:
                 self.v.visit(st)
 
         self.v.emitter.emitLabel(l_end)
+        log(f"\t[TAC][switch] End switch -> {l_end}", channel="tac")
         self.v.emitter.clearFlowTermination()
         self.switch_ctx_stack.pop()
 
@@ -439,7 +521,7 @@ class TacControlFlow:
 
     # ---------------- break / continue ----------------
 
-    @logFunction(channel="tac")
+    
     def visitBreakStatement(self, ctx: CompiscriptParser.BreakStatementContext):
         target = None
         if self.loop_ctx_stack:
@@ -450,6 +532,7 @@ class TacControlFlow:
         if target is None:
             return {"terminated": False, "reason": None}
 
+        log(f"\t[TAC][break] Jump to {target}", channel="tac")
         self.v.emitter.emitGoto(target)
         self.v.emitter.markFlowTerminated()
 
@@ -457,7 +540,7 @@ class TacControlFlow:
         self.v.stmt_just_terminator_node = ctx
         return {"terminated": True, "reason": "break"}
 
-    @logFunction(channel="tac")
+    
     def visitContinueStatement(self, ctx: CompiscriptParser.ContinueStatementContext):
         target = self.loop_ctx_stack[-1]["continue"] if self.loop_ctx_stack else None
         if target is None:
@@ -466,6 +549,7 @@ class TacControlFlow:
         if self.loop_ctx_stack:
             self.loop_ctx_stack[-1]["has_continue"] = True
 
+        log(f"\t[TAC][continue] Jump to {target}", channel="tac")
         self.v.emitter.emitGoto(target)
         self.v.emitter.markFlowTerminated()
         self.v.stmt_just_terminated = "continue"

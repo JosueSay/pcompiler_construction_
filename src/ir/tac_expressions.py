@@ -5,7 +5,6 @@ from ir.tac import Op
 from ir.addr_format import place_of_symbol
 
 
-
 class TacExpressions:
     """
     Emisión de TAC para expresiones.
@@ -13,39 +12,51 @@ class TacExpressions:
     aquí solo materializamos lugares (places) y cuádruplos.
     """
 
-    @logFunction(channel="tac")
+    
     def __init__(self, v, lvalues):
-        log("===== [tac_expressions] start =====", channel="tac")
+        """
+        Inicializa el generador de TAC para expresiones.
+        :param v: Visitador/contexto que contiene emitter, temp_pool, etc.
+        :param lvalues: Visitor auxiliar para lvalues
+        """
         self.v = v
         self.lvalues = lvalues
 
+        log("=" * 60, channel="tac")
+        log("↳ [TacExpressions] initialized", channel="tac")
+        log("=" * 60, channel="tac")
+
     # ---------- Entradas ----------
 
-    @logFunction(channel="tac")
+    
     def visitExpression(self, ctx):
         if ctx.getChildCount() == 0:
             return None
         child = ctx.getChild(0)
+        log(f"\t[TAC][expr] visitExpression -> child: {child.getText()}", channel="tac")
         self.v.visit(child)
         p, it = deepPlace(child)
         if p is not None:
             setPlace(ctx, p, it)
+            log(f"\t[TAC][expr] place set for node '{ctx.getText()}': {p}", channel="tac")
         return None
 
-    @logFunction(channel="tac")
+    
     def visitExprNoAssign(self, ctx):
         if ctx.getChildCount() == 0:
             return None
         child = ctx.getChild(0)
+        log(f"\t[TAC][expr] visitExprNoAssign -> child: {child.getText()}", channel="tac")
         self.v.visit(child)
         p, it = deepPlace(child)
         if p is not None:
             setPlace(ctx, p, it)
+            log(f"\t[TAC][expr] place set for node '{ctx.getText()}': {p}", channel="tac")
         return None
 
     # ---------- Primarios ----------
 
-    @logFunction(channel="tac")
+    
     def visitPrimaryExpr(self, ctx):
         if hasattr(ctx, "literalExpr") and ctx.literalExpr() is not None:
             return self.v.visit(ctx.literalExpr())
@@ -57,26 +68,26 @@ class TacExpressions:
             p = getPlace(ch) or deepPlace(ch)[0]
             if p is not None:
                 setPlace(ctx, p, isTempNode(ch))
+                log(f"\t[TAC][expr] place set for parenthesized expr: {p}", channel="tac")
             return None
         return self.v.visitChildren(ctx)
 
-    @logFunction(channel="tac")
+    
     def visitLiteralExpr(self, ctx):
-        # Los literales usan su texto como place.
         value = ctx.getText()
         setPlace(ctx, value, False)
+        log(f"\t[TAC][expr] literal: {value}", channel="tac")
         return None
 
-    @logFunction(channel="tac")
+    
     def visitIdentifierExpr(self, ctx):
         name = ctx.getText()
         sym = self.v.scopeManager.lookup(name)
         if sym is None:
-            # La pasada semántica debió reportarlo.
+            log(f"\t[TAC][warn] identifier not found: {name}", channel="tac")
             return None
 
         if sym.category == SymbolCategory.FUNCTION:
-            # Función con capturas → construir closure
             captured = []
             try:
                 cap_info = getattr(sym, "captures", None)
@@ -89,56 +100,56 @@ class TacExpressions:
                 args_txt = ",".join(captured) if captured else ""
                 env_t = self.v.emitter.temp_pool.newTemp("ref")
                 self.v.emitter.emit(Op.MKENV, arg1=args_txt, res=env_t)
-
                 clos_t = self.v.emitter.temp_pool.newTemp("ref")
                 f_label = getattr(sym, "label", None) or f"{sym.name}"
                 self.v.emitter.emit(Op.MKCLOS, arg1=f_label, arg2=env_t, res=clos_t)
-
                 self.v.emitter.temp_pool.free(env_t, "*")
-
                 setPlace(ctx, clos_t, True)
+                log(f"\t[TAC][expr] closure created for function '{name}' -> {clos_t}", channel="tac")
                 return None
 
-            # Función sin capturas: usar el nombre textual como place.
+            # Función sin capturas
             setPlace(ctx, name, False)
+            log(f"\t[TAC][expr] function identifier: {name}", channel="tac")
             return None
 
-        # Variable / campo: usar su dirección de frame/global para el 'place'
+        # Variable / campo
         try:
-            sym = self.v.scopeManager.lookup(name)
             addr = place_of_symbol(sym) if sym is not None else name
         except Exception:
             addr = name
         setPlace(ctx, addr, False)
+        log(f"\t[TAC][expr] variable identifier: {name} -> {addr}", channel="tac")
         return None
 
-    @logFunction(channel="tac")
+    
     def visitArrayLiteral(self, ctx):
         expr_ctxs = list(ctx.expression()) or []
-
-        # Crear lista
         t_list = self.v.emitter.temp_pool.newTemp("ref")
         self.v.emitter.emit(Op.NEWLIST, arg1=len(expr_ctxs), res=t_list)
+        log(f"\t[TAC][expr] new array/list temp: {t_list} with {len(expr_ctxs)} elements", channel="tac")
 
-        # Cargar elementos
         for k, ek in enumerate(expr_ctxs):
             self.v.visit(ek)
             elem_place = getattr(ek, "_place", None) or ek.getText()
             self.v.emitter.emit(Op.INDEX_STORE, arg1=t_list, res=elem_place, label=k)
+            log(f"\t[TAC][expr] array element {k}: {elem_place}", channel="tac")
             if getattr(ek, "_is_temp", False):
                 self.v.emitter.temp_pool.free(elem_place, "*")
 
         setPlace(ctx, t_list, True)
+        log(f"\t[TAC][expr] array literal place: {t_list}", channel="tac")
         return None
 
-    @logFunction(channel="tac")
+    
     def visitThisExpr(self, ctx):
         setPlace(ctx, "this", False)
+        log(f"\t[TAC][expr] 'this' expression", channel="tac")
         return None
 
     # ---------- Operadores con emisión ----------
 
-    @logFunction(channel="tac")
+    
     def visitAdditiveExpr(self, ctx):
         """
         Evalúa una cadena izquierda-asociativa de sumas/restas.
@@ -162,6 +173,7 @@ class TacExpressions:
 
             t = self.v.emitter.temp_pool.newTemp("*")
             self.v.emitter.emit(Op.BINARY, arg1=current_place, arg2=right_place, res=t, label=op_txt)
+            log(f"\t[TAC][expr] binary {op_txt}: {current_place}, {right_place} -> {t}", channel="tac")
 
             freeIfTemp(current_node, self.v.emitter.temp_pool, "*")
             freeIfTemp(right_node, self.v.emitter.temp_pool, "*")
@@ -171,21 +183,15 @@ class TacExpressions:
             i += 2
 
         setPlace(ctx, current_place, True if made_temp else isTempNode(left_node))
+        log(f"\t[TAC][expr] additive expr place: {current_place}", channel="tac")
         return None
+
     
-    @logFunction(channel="tac")
     def visitMultiplicativeExpr(self, ctx):
-        """
-        Misma estrategia que aditiva (izquierda-asociativa).
-        """
         return self.visitAdditiveExpr(ctx)
 
-    @logFunction(channel="tac")
+    
     def visitRelationalExpr(self, ctx):
-        """
-        Cadenas relacionales (a < b < c) se evalúan por pares,
-        materializando booleanos intermedios.
-        """
         children = list(ctx.getChildren())
         if not children:
             return None
@@ -198,7 +204,7 @@ class TacExpressions:
         i = 1
         final_place = last_place
         made_temp = False
-        
+
         while i < len(children):
             op_txt = children[i].getText()
             right_node = children[i + 1]
@@ -207,6 +213,7 @@ class TacExpressions:
 
             t = self.v.emitter.temp_pool.newTemp("bool")
             self.v.emitter.emit(Op.BINARY, arg1=last_place, arg2=right_place, res=t, label=op_txt)
+            log(f"\t[TAC][expr] relational {op_txt}: {last_place}, {right_place} -> {t}", channel="tac")
 
             freeIfTemp(last_node, self.v.emitter.temp_pool, "*")
             freeIfTemp(right_node, self.v.emitter.temp_pool, "*")
@@ -216,25 +223,16 @@ class TacExpressions:
             made_temp = True
             i += 2
 
-        if made_temp:
-            setPlace(ctx, final_place, True)
-        else:
-            setPlace(ctx, final_place, isTempNode(left_node))
-
+        setPlace(ctx, final_place, True if made_temp else isTempNode(left_node))
+        log(f"\t[TAC][expr] relational expr place: {final_place}", channel="tac")
         return None
 
-    @logFunction(channel="tac")
+    
     def visitEqualityExpr(self, ctx):
-        # Igual que relacional (resultado booleano).
         return self.visitRelationalExpr(ctx)
 
-    @logFunction(channel="tac")
+    
     def visitLogicalAndExpr(self, ctx):
-        """
-        Versión no-cortocircuito para usar en contexto de expresión:
-        genera un temporal booleano con '&&' como operador binario.
-        (El cortocircuito se maneja cuando está en posición condicional.)
-        """
         children = list(ctx.getChildren())
         if not children:
             return None
@@ -246,7 +244,7 @@ class TacExpressions:
 
         i = 1
         made_temp = False
-        
+
         while i < len(children):
             right_node = children[i + 1]
             self.v.visit(right_node)
@@ -254,6 +252,7 @@ class TacExpressions:
 
             t = self.v.emitter.temp_pool.newTemp("bool")
             self.v.emitter.emit(Op.BINARY, arg1=current_place, arg2=right_place, res=t, label="&&")
+            log(f"\t[TAC][expr] logical AND: {current_place}, {right_place} -> {t}", channel="tac")
 
             freeIfTemp(current_node, self.v.emitter.temp_pool, "*")
             freeIfTemp(right_node, self.v.emitter.temp_pool, "*")
@@ -263,14 +262,11 @@ class TacExpressions:
             i += 2
 
         setPlace(ctx, current_place, True if made_temp else isTempNode(left_node))
+        log(f"\t[TAC][expr] logical AND expr place: {current_place}", channel="tac")
         return None
 
-    @logFunction(channel="tac")
+    
     def visitLogicalOrExpr(self, ctx):
-        """
-        Versión no-cortocircuito para contexto de expresión:
-        genera un temporal booleano con '||' como operador binario.
-        """
         children = list(ctx.getChildren())
         if not children:
             return None
@@ -289,6 +285,7 @@ class TacExpressions:
 
             t = self.v.emitter.temp_pool.newTemp("bool")
             self.v.emitter.emit(Op.BINARY, arg1=current_place, arg2=right_place, res=t, label="||")
+            log(f"\t[TAC][expr] logical OR: {current_place}, {right_place} -> {t}", channel="tac")
 
             freeIfTemp(current_node, self.v.emitter.temp_pool, "*")
             freeIfTemp(right_node, self.v.emitter.temp_pool, "*")
@@ -298,9 +295,10 @@ class TacExpressions:
             i += 2
 
         setPlace(ctx, current_place, True if made_temp else isTempNode(left_node))
+        log(f"\t[TAC][expr] logical OR expr place: {current_place}", channel="tac")
         return None
 
-    @logFunction(channel="tac")
+    
     def visitUnaryExpr(self, ctx):
         if ctx.getChildCount() == 2:
             op_txt = ctx.getChild(0).getText()
@@ -312,6 +310,7 @@ class TacExpressions:
             self.v.emitter.emit(Op.UNARY, arg1=inner_place, res=t, label=op_txt)
             freeIfTemp(inner_node, self.v.emitter.temp_pool, "*")
             setPlace(ctx, t, True)
+            log(f"\t[TAC][expr] unary {op_txt}: {inner_place} -> {t}", channel="tac")
             return None
 
         # Caso "(expr)" → propagar place del hijo.
@@ -319,11 +318,12 @@ class TacExpressions:
         p = getPlace(ctx.primaryExpr()) or deepPlace(ctx.primaryExpr())[0]
         if p is not None:
             setPlace(ctx, p, isTempNode(ctx.primaryExpr()))
+            log(f"\t[TAC][expr] propagated place from primary: {p}", channel="tac")
         return None
 
     # ---------- Objetos / propiedades / new ----------
 
-    @logFunction(channel="tac")
+    
     def visitNewExpr(self, ctx):
         class_name = ctx.Identifier().getText()
 
@@ -335,6 +335,7 @@ class TacExpressions:
 
         t_obj = self.v.emitter.temp_pool.newTemp("ref")
         self.v.emitter.emit(Op.NEWOBJ, arg1=class_name, arg2=str(obj_size), res=t_obj)
+        log(f"\t[TAC][expr] NEWOBJ {class_name} (size={obj_size}) -> {t_obj}", channel="tac")
 
         # Llamada al constructor si existe en la jerarquía
         ctor_owner = None
@@ -361,16 +362,20 @@ class TacExpressions:
                 n_params += 1
             f_label = f"{ctor_owner}_constructor"
             self.v.emitter.emit(Op.CALL, arg1=f_label, arg2=str(n_params))
+            log(f"\t[TAC][expr] CALL constructor {f_label} with {n_params} params", channel="tac")
 
         setPlace(ctx, t_obj, True)
+        log(f"\t[TAC][expr] newExpr place: {t_obj}", channel="tac")
         return None
 
-    @logFunction(channel="tac")
+    
     def visitPropertyAccessExpr(self, ctx):
         # No materializa por sí solo: LValues decide si hace FIELD_LOAD o binding de método.
         self.v.visit(ctx.expression())
+        log(f"\t[TAC][expr] property access on expr: {ctx.getText()}", channel="tac")
         return None
 
-    @logFunction(channel="tac")
+    
     def visitLeftHandSide(self, ctx):
+        log(f"\t[TAC][expr] visitLeftHandSide: {ctx.getText()}", channel="tac")
         return self.lvalues.visitLeftHandSide(ctx)
