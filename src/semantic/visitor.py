@@ -1,16 +1,14 @@
 from antlr_gen.CompiscriptVisitor import CompiscriptVisitor
 from antlr_gen.CompiscriptParser import CompiscriptParser
-from logs.logger import log, logFunction
+from logs.logger import log
 
 from semantic.scope_manager import ScopeManager
 from semantic.diagnostics import Diagnostics
 from semantic.registry.method_registry import MethodRegistry
 from semantic.class_handler import ClassHandler
 
-# IR (solo se inyecta para compartir estado del emitter; esta fase no emite TAC)
 from ir.emitter import Emitter
 
-# Analyzers (fase SEMÁNTICA únicamente)
 from semantic.analyzers.lvalues import LValuesAnalyzer
 from semantic.analyzers.expressions import ExpressionsAnalyzer
 from semantic.analyzers.statements import StatementsAnalyzer
@@ -24,20 +22,15 @@ from semantic.errors import SemanticError
 
 class VisitorCPS(CompiscriptVisitor):
     """
-    Visitor de la fase **semántica**. Orquesta los distintos analizadores
-    (expresiones, statements, funciones, clases, returns, control de flujo),
-    mantiene las tablas de símbolos/alcances y acumula diagnósticos.
-
-    Nota: aunque recibe un `Emitter`, esta pasada **no** genera TAC; el emitter
-    se comparte solo para algunas banderas auxiliares (p.ej. barreras de flujo
-    durante validaciones que no deben producir código).
+    Visitor de la fase semántica. Orquesta analizadores, maneja scope y acumula errores.
     """
 
-    @logFunction(channel="semantic")
     def __init__(self, emitter: Emitter | None = None):
-        log("===== [VisitorCPS.py] Inicio =====", channel="semantic")
+        log("\n" + "="*80, channel="semantic")
+        log("===== [VisitorCPS] Inicio SEMÁNTICO =====", channel="semantic")
+        log("="*80 + "\n", channel="semantic")
 
-        # Estado y servicios base
+        # Estado base
         self.errors = []
         self.diag = Diagnostics()
         self.scopeManager = ScopeManager()
@@ -49,11 +42,11 @@ class VisitorCPS(CompiscriptVisitor):
         self.known_classes = set()
         self.class_stack = []
         self.in_method = False
-        self.fn_stack = []         # pila de tipos de retorno esperados
-        self.fn_ctx_stack = []     # capturas para closures
+        self.fn_stack = []
+        self.fn_ctx_stack = []
         self.loop_depth = 0
 
-        # Flags de control de flujo (p. ej., para detectar código inalcanzable)
+        # Flags de control de flujo
         self.stmt_just_terminated = None
         self.stmt_just_terminator_node = None
 
@@ -68,20 +61,20 @@ class VisitorCPS(CompiscriptVisitor):
 
         log(f"__init__ -> Visitor inicializado, emitter={self.emitter}", channel="semantic")
 
-    @logFunction(channel="semantic")
     def appendErr(self, err: SemanticError):
-        """Agrega un error al acumulado y lo reenvía al sistema de diagnósticos."""
-        log(f"[VisitorCPS.py] appendErr -> err={err}", channel="semantic")
+        """Agrega un error y lo registra en diagnósticos."""
+        log(f"[VisitorCPS] appendErr -> {err}", channel="semantic")
         self.errors.append(err)
         result = self.diag.extend(err)
-        log(f"[VisitorCPS.py] appendErr -> errors_totales={len(self.errors)}", channel="semantic")
+        log(f"[VisitorCPS] appendErr -> total_errors={len(self.errors)}", channel="semantic")
         return result
 
-    @logFunction(channel="semantic")
     def visitProgram(self, ctx: CompiscriptParser.ProgramContext):
-        log("===== [VisitorCPS.py] visitProgram =====", channel="semantic")
+        log("\n" + "="*80, channel="semantic")
+        log("===== [VisitorCPS] visitProgram =====", channel="semantic")
+        log("="*80 + "\n", channel="semantic")
 
-        # --- Pre-scan: registrar nombres de clases (y chequear base conocida) ---
+        # --- Pre-scan de clases ---
         for st in ctx.statement():
             cd = st.classDeclaration() if hasattr(st, "classDeclaration") else None
             if cd:
@@ -95,10 +88,7 @@ class VisitorCPS(CompiscriptVisitor):
                 else:
                     self.known_classes.add(cname)
                     self.class_handler.ensureClass(cname, base)
-                    if base:
-                        log(f"[class] (pre-scan) declarada: {cname} : {base}", channel="semantic")
-                    else:
-                        log(f"[class] (pre-scan) declarada: {cname}", channel="semantic")
+                    log(f"[class] (pre-scan) declarada: {cname}" + (f" : {base}" if base else ""), channel="semantic")
 
                 if base and base not in self.known_classes:
                     self.appendErr(SemanticError(
@@ -116,21 +106,21 @@ class VisitorCPS(CompiscriptVisitor):
 
         # --- Reporte de errores ---
         if self.errors:
-            log("Semantic Errors:", channel="semantic")
+            log("\n[VisitorCPS] Semantic Errors:", channel="semantic")
             for error in self.errors:
                 log(f" - {error}", channel="semantic")
         else:
-            log("Type checking passed.", channel="semantic")
+            log("\n[VisitorCPS] Type checking passed.", channel="semantic")
 
-        # --- Reporte de símbolos (útil para debugging) ---
-        log("Símbolos declarados:", channel="semantic")
+        # --- Reporte de símbolos ---
+        log("\n[VisitorCPS] Símbolos declarados:", channel="semantic")
         for sym in self.scopeManager.allSymbols():
             init_info = (
                 f", initialized={sym.initialized}"
-                + (f", init_value_type={sym.init_value_type}" if sym.init_value_type else "")
-                + (f", init_note={sym.init_note}" if sym.init_note else "")
+                + (f", init_value_type={sym.init_value_type}" if getattr(sym, "init_value_type", None) else "")
+                + (f", init_note={sym.init_note}" if getattr(sym, "init_note", None) else "")
             )
-            storage_info = f", storage={sym.storage}, is_ref={sym.is_ref}"
+            storage_info = f", storage={sym.storage}, is_ref={getattr(sym, 'is_ref', None)}"
             extra_ir = ""
             try:
                 if getattr(sym, "label", None):
@@ -141,9 +131,9 @@ class VisitorCPS(CompiscriptVisitor):
                 pass
 
             log(
-                f" - {sym.name}: {sym.type} ({sym.category}), "
-                f"tamaño={sym.width}, offset={sym.offset}{storage_info}{init_info}{extra_ir}",
-                channel="semantic",
+                f" - {sym.name}: {sym.type} ({sym.category}), tamaño={sym.width}, offset={sym.offset}"
+                f"{storage_info}{init_info}{extra_ir}",
+                channel="semantic"
             )
         return None
 
@@ -165,7 +155,6 @@ class VisitorCPS(CompiscriptVisitor):
     def visitDoWhileStatement(self, ctx):   return self.ctrl.visitDoWhileStatement(ctx)
     def visitForStatement(self, ctx):       return self.ctrl.visitForStatement(ctx)
     def visitSwitchStatement(self, ctx):    return self.ctrl.visitSwitchStatement(ctx)
-    # alias opcionales (según gramática)
     def visitSwitchStmt(self, ctx):         return self.ctrl.visitSwitchStatement(ctx)
     def visitSwitch(self, ctx):             return self.ctrl.visitSwitchStatement(ctx)
     def visitCaseStatement(self, ctx):      return self.ctrl.visitSwitchStatement(ctx)

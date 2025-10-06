@@ -4,39 +4,36 @@ from semantic.symbol_kinds import SymbolCategory
 from semantic.registry.type_resolver import resolveTypeCtx, validateKnownTypes
 from semantic.registry.closure_model import CaptureInfo
 from semantic.errors import SemanticError
-from logs.logger import log, logFunction
+from logs.logger import log
 
 
 class FunctionsAnalyzer:
     """
     Análisis **semántico** de funciones (solo tipos; sin emisión de TAC).
-    - Resuelve tipos de parámetros y del retorno.
-    - Declara el símbolo de la función en el scope y fija su `label`.
-    - Abre scope para parámetros, analiza el cuerpo bajo barrera (sin TAC).
-    - Registra capturas para funciones anidadas (closures).
-    - Cierra el scope fijando `local_frame_size` en el símbolo.
+
+    Reglas:
+      - Resuelve tipos de parámetros y del retorno.
+      - Declara el símbolo de la función en el scope y fija su `label`.
+      - Abre scope para parámetros, analiza el cuerpo bajo barrera (sin TAC).
+      - Registra capturas para funciones anidadas (closures).
+      - Cierra el scope fijando `local_frame_size`.
     """
 
-    @logFunction(channel="semantic")
     def __init__(self, v):
-        log("===== [Functions.py] Inicio (SEMÁNTICO) =====", channel="semantic")
+        log("\n" + "="*80, channel="semantic")
+        log("===== [FunctionsAnalyzer] Inicio SEMÁNTICO =====", channel="semantic")
+        log("="*80 + "\n", channel="semantic")
         self.v = v
 
-    @logFunction(channel="semantic")
     def makeFuncLabel(self, name: str) -> str:
-        """
-        Convención de etiquetas:
-          - Función libre:  f_<name>
-          - (Si está anidada en clase) f_<Class>_<name>
-        """
         owner = self.v.class_stack[-1] if getattr(self.v, "class_stack", None) else None
         label = f"{owner}_{name}" if owner else f"{name}"
         log(f"[makeFuncLabel] name='{name}', owner='{owner}' -> label='{label}'", channel="semantic")
         return label
 
-    @logFunction(channel="semantic")
     def visitFunctionDeclaration(self, ctx: CompiscriptParser.FunctionDeclarationContext):
         name = ctx.Identifier().getText()
+        log("\n" + "-"*80, channel="semantic")
         log(f"[function] (SEM) inicio: {name}", channel="semantic")
 
         # ---- Parámetros: tipos y nombres ----
@@ -64,7 +61,7 @@ class FunctionsAnalyzer:
                         ptype = ErrorType()
                 param_names.append(pname)
                 param_types.append(ptype)
-                log(f"[param] (SEM) {pname}: {ptype}", channel="semantic")
+                log(f"\t[param] {pname}: {ptype}", channel="semantic")
 
         # ---- Tipo de retorno ----
         rtype = None
@@ -72,7 +69,7 @@ class FunctionsAnalyzer:
             rtype = resolveTypeCtx(ctx.type_())
             validateKnownTypes(rtype, self.v.known_classes, ctx,
                                f"retorno de función '{name}'", self.v.errors)
-        log(f"[return] (SEM) tipo: {rtype if rtype else 'void'}", channel="semantic")
+        log(f"\t[return] tipo: {rtype if rtype else 'void'}", channel="semantic")
 
         # ---- Declarar símbolo de función ----
         try:
@@ -81,17 +78,17 @@ class FunctionsAnalyzer:
                 rtype if rtype is not None else VoidType(),
                 category=SymbolCategory.FUNCTION,
                 initialized=True,
-                init_value_type=None,
-                init_note="decl"
+                init_value_type=None, init_note="decl"
             )
             fsym.param_types = param_types
             fsym.return_type = rtype
             fsym.captures = CaptureInfo(captured=[])
             fsym.label = self.makeFuncLabel(name)
-            log(f"[function] (SEM) declarada: {name}({', '.join(param_names)}) -> {rtype if rtype else 'void'} ; label={fsym.label}", channel="semantic")
+            log(f"\t[function] declarada: {name}({', '.join(param_names)}) -> {rtype if rtype else 'void'} ; label={fsym.label}", channel="semantic")
         except Exception as e:
             self.v.appendErr(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
-            # Continuar con análisis semántico del cuerpo bajo barrera (sin TAC)
+            log(f"\t[error] al declarar función: {e}", channel="semantic")
+            # Analizar cuerpo bajo barrera aunque haya error
             old_barrier = getattr(self.v, "emitter", None).flow_terminated if hasattr(self.v, "emitter") else None
             if hasattr(self.v, "emitter"):
                 self.v.emitter.flow_terminated = True
@@ -101,7 +98,7 @@ class FunctionsAnalyzer:
                 if hasattr(self.v, "emitter"):
                     self.v.emitter.flow_terminated = old_barrier
 
-        # ---- Abrir scope de función y registrar parámetros ----
+        # ---- Abrir scope y registrar parámetros ----
         self.v.scopeManager.enterFunctionScope()
         curr_fn_scope_id = self.v.scopeManager.currentScopeId()
         self.v.fn_ctx_stack.append({
@@ -116,14 +113,14 @@ class FunctionsAnalyzer:
                     pname, ptype, category=SymbolCategory.PARAMETER,
                     initialized=True, init_value_type=None, init_note="param"
                 )
-                log(f"[scope.param] (SEM) {pname}: {ptype}, offset={psym.offset}", channel="semantic")
+                log(f"\t[scope.param] {pname}: {ptype}, offset={psym.offset}", channel="semantic")
             except Exception as e:
                 self.v.appendErr(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
 
         expected_r = rtype if rtype is not None else VoidType()
         self.v.fn_stack.append(expected_r)
 
-        # ---- Analizar cuerpo bajo barrera (sin TAC) ----
+        # ---- Analizar cuerpo bajo barrera ----
         old_barrier = getattr(self.v, "emitter", None).flow_terminated if hasattr(self.v, "emitter") else None
         if hasattr(self.v, "emitter"):
             self.v.emitter.flow_terminated = True
@@ -143,11 +140,11 @@ class FunctionsAnalyzer:
         cap_list = sorted(list(fn_ctx["captures"]), key=lambda x: x[0])
         fsym.captures = CaptureInfo(captured=[(n, t, sid) for (n, t, sid) in cap_list])
         if fsym.captures.captured:
-            log(f"[closure] (SEM) {name} captura -> {fsym.captures.asDebug()}", channel="semantic")
+            log(f"\t[closure] captura -> {fsym.captures.asDebug()}", channel="semantic")
 
         # ---- Cerrar scope y fijar frame_size ----
         size = self.v.scopeManager.closeFunctionScope(fsym)
-        log(f"[scope] (SEM) función '{name}' cerrada; frame_size={size} bytes", channel="semantic")
-
+        log(f"[scope] función '{name}' cerrada; frame_size={size} bytes", channel="semantic")
         log(f"[function] (SEM) fin: {name}", channel="semantic")
+        log("-"*80 + "\n", channel="semantic")
         return block_result

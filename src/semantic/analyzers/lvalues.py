@@ -4,46 +4,40 @@ from semantic.custom_types import (
 )
 from semantic.type_system import isAssignable
 from semantic.errors import SemanticError
-from logs.logger import log, logFunction
+from logs.logger import log
 
 
 class LValuesAnalyzer:
     """
-    Valida semántica de `leftHandSide` y sus `suffixOp`:
-      - Indexación: `arr[i]`
-      - Llamadas: `f(a, b, ...)`
-      - Acceso a propiedades: `obj.prop` / `obj.metodo`
+    Valida semántica de `leftHandSide` y sus `suffixOp` (indexación, llamadas, acceso a propiedades).
 
     Notas:
-    - Esta fase **no** emite TAC ni escribe metadatos de ejecución (`_place`, `_is_temp`).
-    - Solo reporta errores de tipos/forma y devuelve el tipo resultante.
-    - Usa barrera de emisión para impedir generación de TAC si existe un emitter activo.
+      - No emite TAC.
+      - Reporta errores de tipos/forma.
+      - Devuelve el tipo resultante.
     """
 
-    @logFunction(channel="semantic")
     def __init__(self, v):
-        log("===== [lvalues.py] Inicio (SEMÁNTICO) =====", channel="semantic")
+        log("\n" + "="*80, channel="semantic")
+        log("===== [LValuesAnalyzer] Inicio SEMÁNTICO =====", channel="semantic")
+        log("="*80 + "\n", channel="semantic")
         self.v = v
 
-    @logFunction(channel="semantic")
     def visitLeftHandSide(self, ctx: CompiscriptParser.LeftHandSideContext):
-        # Bloqueo de emisión TAC durante la validación semántica
         old_barrier = getattr(self.v, "emitter", None).flow_terminated if hasattr(self.v, "emitter") else None
         if hasattr(self.v, "emitter"):
             self.v.emitter.flow_terminated = True
-        try:
-            # Tipo BASE del átomo (p.ej., 'b' en 'b.inc(5)')
-            base_type = self.v.visit(ctx.primaryAtom())
 
-            # TAC lo leerá desde ctx.primaryAtom()._type para enlazar métodos.
+        try:
+            # Tipo base del átomo
+            base_type = self.v.visit(ctx.primaryAtom())
             try:
                 setattr(ctx.primaryAtom(), "_type", base_type)
             except Exception:
                 pass
 
             lit_t = None
-
-            # Pista de arreglo literal para validación de rangos estáticos
+            # Validación de arreglos literales
             try:
                 base_txt = ctx.primaryAtom().getText()
                 if base_txt and (base_txt[0].isalpha() or base_txt[0] == '_'):
@@ -58,12 +52,14 @@ class LValuesAnalyzer:
                 pass
 
             for suf in ctx.suffixOp():
+                # ---------------------------
                 # IndexExpr
                 if isinstance(suf, CompiscriptParser.IndexExprContext):
                     if not isinstance(base_type, ArrayType):
                         self.v.appendErr(SemanticError(
                             f"Indexación sobre un valor no-arreglo: {base_type}",
                             line=ctx.start.line, column=ctx.start.column))
+                        log("\t[error] indexación sobre no-arreglo", channel="semantic")
                         base_type = ErrorType()
                         continue
 
@@ -72,10 +68,11 @@ class LValuesAnalyzer:
                         self.v.appendErr(SemanticError(
                             f"Índice no entero en acceso de arreglo: se encontró {idx_t}",
                             line=ctx.start.line, column=ctx.start.column))
+                        log(f"\t[error] índice no entero: {idx_t}", channel="semantic")
                         base_type = ErrorType()
                         continue
 
-                    # Validación estática de rango para literales
+                    # Validación estática de rango
                     if lit_t is not None and isinstance(lit_t, ArrayType):
                         try:
                             idx_txt = suf.expression().getText()
@@ -87,6 +84,7 @@ class LValuesAnalyzer:
                                     self.v.appendErr(SemanticError(
                                         f"Índice fuera de rango: {idx_val}; válido: 0..{n-1}",
                                         line=ctx.start.line, column=ctx.start.column))
+                                    log(f"\t[error] índice fuera de rango: {idx_val}", channel="semantic")
                                     base_type = ErrorType()
                                     continue
                         except Exception:
@@ -97,12 +95,14 @@ class LValuesAnalyzer:
                         lit_t = lit_t.elem_type
                     continue
 
+                # ---------------------------
                 # CallExpr
                 if isinstance(suf, CompiscriptParser.CallExprContext):
                     if not isinstance(base_type, FunctionType):
                         self.v.appendErr(SemanticError(
                             "Llamada a algo que no es función.",
                             line=ctx.start.line, column=ctx.start.column))
+                        log("\t[error] llamada a no-función", channel="semantic")
                         base_type = ErrorType()
                         continue
 
@@ -115,6 +115,7 @@ class LValuesAnalyzer:
                         self.v.appendErr(SemanticError(
                             f"Número de argumentos inválido: esperados {expected}, recibidos {got}.",
                             line=ctx.start.line, column=ctx.start.column))
+                        log(f"\t[error] args inválidos: esperados {expected}, recibidos {got}", channel="semantic")
                         base_type = ErrorType()
                         continue
 
@@ -124,14 +125,16 @@ class LValuesAnalyzer:
                             self.v.appendErr(SemanticError(
                                 f"Argumento #{i} incompatible: no se puede asignar {at} a {pt}.",
                                 line=ctx.start.line, column=ctx.start.column))
+                            log(f"\t[error] arg#{i} incompatible: {at} -> {pt}", channel="semantic")
                             ok = False
                     if not ok:
                         base_type = ErrorType()
                         continue
 
-                    base_type = base_type.return_type if base_type.return_type is not None else VoidType()
+                    base_type = base_type.return_type if base_type.return_type else VoidType()
                     continue
 
+                # ---------------------------
                 # PropertyAccessExpr
                 if isinstance(suf, CompiscriptParser.PropertyAccessExprContext):
                     prop_name = suf.Identifier().getText()
@@ -139,18 +142,17 @@ class LValuesAnalyzer:
                         self.v.appendErr(SemanticError(
                             f"Acceso a propiedades en tipo no-objeto '{base_type}'.",
                             line=ctx.start.line, column=ctx.start.column))
+                        log(f"\t[error] acceso a propiedad en no-objeto: {base_type}", channel="semantic")
                         base_type = ErrorType()
                         continue
 
                     class_name = base_type.name
-                    # Atributo
                     attr_t = self.v.class_handler.getAttributeType(class_name, prop_name)
-                    if attr_t is not None:
+                    if attr_t:
                         base_type = attr_t
                         lit_t = None
                         continue
 
-                    # Método (con herencia)
                     sig = self.v.method_registry.lookupMethod(f"{class_name}.{prop_name}")
                     if sig is None:
                         curr, seen = class_name, set()
@@ -163,7 +165,7 @@ class LValuesAnalyzer:
 
                     if sig:
                         param_types, ret_t = sig
-                        ret_t = ret_t if ret_t is not None else VoidType()
+                        ret_t = ret_t if ret_t else VoidType()
                         params_wo_this = param_types[1:] if len(param_types) > 0 else []
                         base_type = FunctionType(params_wo_this, ret_t)
                         continue
@@ -171,6 +173,7 @@ class LValuesAnalyzer:
                     self.v.appendErr(SemanticError(
                         f"Miembro '{prop_name}' no declarado en clase '{class_name}'.",
                         line=ctx.start.line, column=ctx.start.column))
+                    log(f"\t[error] miembro no declarado: {prop_name}", channel="semantic")
                     base_type = ErrorType()
                     continue
 

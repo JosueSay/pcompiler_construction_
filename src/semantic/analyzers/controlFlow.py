@@ -2,7 +2,7 @@ from typing import Any
 from antlr_gen.CompiscriptParser import CompiscriptParser
 from semantic.custom_types import BoolType, ErrorType, ClassType
 from semantic.errors import SemanticError
-from logs.logger import log, logFunction
+from logs.logger import log
 
 from utils.ast_utils import (
     asList,
@@ -17,25 +17,20 @@ from utils.ast_utils import (
 
 class ControlFlowAnalyzer:
     """
-    Análisis **semántico** del control de flujo (sin emitir TAC).
-
-    Reglas que valida:
-      - Condiciones de `if`, `while`, `do-while`, `for` deben ser de tipo boolean.
-      - `break`/`continue` solo dentro de bucles (y `break` permitido en `switch`).
-      - En `switch`, los `case` deben ser compatibles con el tipo del discriminante.
+    Análisis semántico del control de flujo (sin emitir TAC).
     """
 
     def __init__(self, v):
-        log("===== [controlFlow.py] Inicio (SEM) =====", channel="semantic")
+        log("\n" + "="*80, channel="semantic")
+        log("===== [ControlFlowAnalyzer] Inicio SEMÁNTICO =====", channel="semantic")
+        log("="*80 + "\n", channel="semantic")
         self.v = v
         self.switch_depth = 0  # contexto para validar 'break' en switch
 
-    # ---------- helpers semánticos ----------
-    @logFunction(channel="semantic")
+    # ---------- Helpers semánticos ----------
     def typeOfSilent(self, expr_ctx):
         """
-        Evalúa el tipo de una expresión **sin** generar TAC.
-        Lo hace activando temporalmente una barrera en el emitter.
+        Evalúa el tipo de una expresión sin generar TAC.
         """
         if expr_ctx is None:
             return ErrorType()
@@ -52,26 +47,24 @@ class ControlFlowAnalyzer:
                     self.v.emitter.temp_pool.resetPerStatement()
                 except Exception:
                     pass
+        log(f"[typeOfSilent] tipo detectado: {t}", channel="semantic")
         return t
 
-    @logFunction(channel="semantic")
     def requireBoolean(self, cond_t, ctx, who: str):
-        """Reporta error si `cond_t` no es boolean (ignorando ErrorType para evitar cascadas)."""
+        """
+        Reporta error si cond_t no es boolean (ignorando ErrorType para evitar cascadas).
+        """
         if isinstance(cond_t, ErrorType):
             return
         if not isinstance(cond_t, BoolType):
             self.v.appendErr(SemanticError(
                 f"La condición de {who} debe ser boolean, no {cond_t}.",
                 line=ctx.start.line, column=ctx.start.column))
+            log(f"\t[error] {who} condición no boolean: {cond_t}", channel="semantic")
 
-    @logFunction(channel="semantic")
     def sameType(self, a, b):
         """
-        Equivalencia de tipos para `switch`:
-        - Propaga True si alguno es ErrorType (evita ruido).
-        - Clases: compara por nombre.
-        - Arreglos: compara recursivamente `elem_type`.
-        - Caso general: misma clase de tipo.
+        Equivalencia de tipos para switch.
         """
         if isinstance(a, ErrorType) or isinstance(b, ErrorType):
             return True
@@ -83,10 +76,9 @@ class ControlFlowAnalyzer:
             return True
         return False
 
-    @logFunction(channel="semantic")
     def collectCaseExprs(self, ctx):
         """
-        Recolecta las expresiones de los `case` de un `switch` (robusta a variaciones del parser).
+        Recolecta expresiones de los 'case' en un switch.
         """
         exprs = []
         cb = getattr(ctx, "caseBlock", None)
@@ -106,15 +98,16 @@ class ControlFlowAnalyzer:
                     get_exprs = getattr(n, "expression", None)
                     if callable(get_exprs):
                         exprs.extend(asList(get_exprs()))
+        log(f"[collectCaseExprs] encontrados {len(exprs)} expressions", channel="semantic")
         return exprs
 
     # ---------- IF ----------
-    @logFunction(channel="semantic")
     def visitIfStatement(self, ctx: CompiscriptParser.IfStatementContext):
         cond_ctx = firstExpression(ctx)
         if cond_ctx is not None:
             cond_t = self.typeOfSilent(cond_ctx)
             self.requireBoolean(cond_t, ctx, "if")
+            log(f"\t[if] condición tipo detectado: {cond_t}", channel="semantic")
 
         stmts = self.collectStmtOrBlock(ctx)
         then_stmt = stmts[0] if len(stmts) >= 1 else None
@@ -134,13 +127,14 @@ class ControlFlowAnalyzer:
 
         return {"terminated": False, "reason": None}
 
+
     # ---------- WHILE ----------
-    @logFunction(channel="semantic")
     def visitWhileStatement(self, ctx: CompiscriptParser.WhileStatementContext):
         cond_ctx = safeAttr(ctx, "expression") or safeAttr(ctx, "cond") or safeAttr(ctx, "condition")
         if cond_ctx is not None:
             cond_t = self.typeOfSilent(cond_ctx)
             self.requireBoolean(cond_t, ctx, "while")
+            log(f"\t[while] condición tipo detectado: {cond_t}", channel="semantic")
 
         body = safeAttr(ctx, "statement") or safeAttr(ctx, "body") or safeAttr(ctx, "block")
 
@@ -158,8 +152,8 @@ class ControlFlowAnalyzer:
 
         return {"terminated": False, "reason": None}
 
+
     # ---------- DO-WHILE ----------
-    @logFunction(channel="semantic")
     def visitDoWhileStatement(self, ctx: CompiscriptParser.DoWhileStatementContext):
         body = safeAttr(ctx, "statement") or safeAttr(ctx, "body") or safeAttr(ctx, "block")
         cond_ctx = safeAttr(ctx, "expression") or safeAttr(ctx, "cond") or safeAttr(ctx, "condition")
@@ -167,6 +161,7 @@ class ControlFlowAnalyzer:
         if cond_ctx is not None:
             cond_t = self.typeOfSilent(cond_ctx)
             self.requireBoolean(cond_t, ctx, "do-while")
+            log(f"\t[do-while] condición tipo detectado: {cond_t}", channel="semantic")
 
         self.v.loop_depth += 1
         old_barrier = getattr(self.v, "emitter", None).flow_terminated if hasattr(self.v, "emitter") else None
@@ -182,8 +177,8 @@ class ControlFlowAnalyzer:
 
         return {"terminated": False, "reason": None}
 
+
     # ---------- FOR ----------
-    @logFunction(channel="semantic")
     def visitForStatement(self, ctx: CompiscriptParser.ForStatementContext):
         init = safeAttr(ctx, "forInit") or safeAttr(ctx, "init") or safeAttr(ctx, "initializer")
         if init is None:
@@ -229,6 +224,7 @@ class ControlFlowAnalyzer:
         if cond_ctx is not None:
             cond_t = self.typeOfSilent(cond_ctx)
             self.requireBoolean(cond_t, ctx, "for")
+            log(f"\t[for] condición tipo detectado: {cond_t}", channel="semantic")
 
         old_barrier = getattr(self.v, "emitter", None).flow_terminated if hasattr(self.v, "emitter") else None
         if hasattr(self.v, "emitter"):
@@ -249,13 +245,13 @@ class ControlFlowAnalyzer:
         return {"terminated": False, "reason": None}
 
     # ---------- SWITCH ----------
-    @logFunction(channel="semantic")
     def visitSwitchStatement(self, ctx):
         discr = firstSwitchDiscriminant(ctx)
         if discr is None:
             return {"terminated": False, "reason": None}
 
         scrutinee_t = self.typeOfSilent(discr)
+        log(f"\t[switch] tipo del discriminante: {scrutinee_t}", channel="semantic")
 
         for e in self.collectCaseExprs(ctx):
             et = self.typeOfSilent(e)
@@ -265,7 +261,7 @@ class ControlFlowAnalyzer:
                         f"Tipo de 'case' ({et}) incompatible con el 'switch' ({scrutinee_t}).",
                         line=e.start.line, column=e.start.column))
 
-        # Recolectar statements por caso y default (independiente del layout del parser)
+        # Recolectar statements por caso y default
         stmt_ctx = getattr(CompiscriptParser, "StatementContext", None)
         expr_ctx = getattr(CompiscriptParser, "ExpressionContext", None)
 
@@ -340,8 +336,8 @@ class ControlFlowAnalyzer:
 
         return {"terminated": False, "reason": None}
 
-    # ---------- break / continue ----------
-    @logFunction(channel="semantic")
+
+    # ---------- BREAK ----------
     def visitBreakStatement(self, ctx: CompiscriptParser.BreakStatementContext):
         if self.v.loop_depth <= 0 and self.switch_depth <= 0:
             self.v.appendErr(SemanticError(
@@ -349,7 +345,8 @@ class ControlFlowAnalyzer:
                 line=ctx.start.line, column=ctx.start.column))
         return {"terminated": False, "reason": None}
 
-    @logFunction(channel="semantic")
+
+    # ---------- CONTINUE ----------
     def visitContinueStatement(self, ctx: CompiscriptParser.ContinueStatementContext):
         if self.v.loop_depth <= 0:
             self.v.appendErr(SemanticError(
@@ -357,11 +354,13 @@ class ControlFlowAnalyzer:
                 line=ctx.start.line, column=ctx.start.column))
         return {"terminated": False, "reason": None}
 
-    # ---------- util interno ----------
+
+    # ---------- UTIL INTERNO ----------
     def collectStmtOrBlock(self, ctx):
         """
-        Versión local y mínima de `collectStmtOrBlock`:
-        prioriza `ctx.statement()` y luego busca bloques/Statements sencillos.
+        Versión local de `collectStmtOrBlock`:
+        - Prioriza `ctx.statement()`.
+        - Luego busca bloques o Statements simples.
         """
         stmts = asList(safeAttr(ctx, "statement"))
         if stmts:
