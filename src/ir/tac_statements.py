@@ -151,12 +151,15 @@ class TacStatements:
     # ----------------------------------
     @logFunction(channel="tac")
     def visitExpressionStatement(self, ctx):
+        if getattr(self.v.emitter, "flow_terminated", False):
+            return None
         get_asgn = getattr(ctx, "assignment", None)
         if callable(get_asgn):
             asg = get_asgn()
             if asg is not None:
                 self.visitAssignment(asg)
                 self.v.emitter.temp_pool.resetPerStatement()
+                return None
 
         expr = ctx.expression()
         txt = getattr(expr, "getText", lambda: "")()
@@ -184,7 +187,9 @@ class TacStatements:
                         self.v.emitter.temp_pool.free(idx_place, "*")
                     if it_rhs:
                         self.v.emitter.temp_pool.free(rhs_place, "*")
-                    self.v.emitter.temp_pool.free(t_len, "*")
+                    if t_len:
+                        self.v.emitter.temp_pool.free(t_len, "*")
+
                     self.v.emitter.temp_pool.resetPerStatement()
                     return None
 
@@ -217,7 +222,9 @@ class TacStatements:
                     t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, curr_place)
                     self.v.emitter.emit(Op.INDEX_STORE, arg1=curr_place, res=rhs_place, label=idx_place)
 
-                    self.v.emitter.temp_pool.free(t_len, "*")
+                    if t_len:
+                        self.v.emitter.temp_pool.free(t_len, "*")
+
                     if it_idx:
                         self.v.emitter.temp_pool.free(idx_place, "*")
                     if it_rhs:
@@ -243,29 +250,44 @@ class TacStatements:
     # ----------------------------------
     @logFunction(channel="tac")
     def visitBlock(self, ctx):
-        terminated_in_block = False
+        terminated = False
+        reason = None
 
         for st in ctx.statement():
-            if terminated_in_block:
-                self.v.emitter.markFlowTerminated()
-                self.v.visit(st)
-                continue
+            # Si ya terminó el flujo, no sigas visitando nada del bloque.
+            if terminated or getattr(self.v.emitter, "flow_terminated", False):
+                break
 
+            # Limpia banderas por sentencia
             self.v.stmt_just_terminated = None
             self.v.stmt_just_terminator_node = None
 
+            # Visita la sentencia
             self.v.visit(st)
 
+            # ¿Esta sentencia terminó el flujo? (return, break emitido como terminador, etc.)
             if self.v.stmt_just_terminated:
-                terminated_in_block = True
+                terminated = True
+                reason = self.v.stmt_just_terminated
+                # Avísale al emitter para que otros visitors (por si acaso) sepan que ya no deben emitir.
+                if hasattr(self.v.emitter, "markFlowTerminated"):
+                    self.v.emitter.markFlowTerminated()
+                break
 
-        return {"terminated": terminated_in_block, "reason": self.v.stmt_just_terminated}
+        # Devolver estado de terminación del bloque
+        return {
+            "terminated": terminated or bool(getattr(self.v.emitter, "flow_terminated", False)),
+            "reason": reason or getattr(self.v, "stmt_just_terminated", None),
+        }
+
 
     # ----------------------------------
     # Declaraciones (solo inicializador)
     # ----------------------------------
     @logFunction(channel="tac")
     def visitVariableDeclaration(self, ctx):
+        if getattr(self.v.emitter, "flow_terminated", False):
+            return None        
         init = ctx.initializer()
         name = ctx.Identifier().getText()
         if init is not None:
@@ -278,6 +300,8 @@ class TacStatements:
 
     @logFunction(channel="tac")
     def visitConstantDeclaration(self, ctx):
+        if getattr(self.v.emitter, "flow_terminated", False):
+            return None
         name = ctx.Identifier().getText() if ctx.Identifier() else "<unnamed-const>"
         expr_ctx = ctx.expression()
         if expr_ctx is not None:
@@ -293,6 +317,8 @@ class TacStatements:
     # ----------------------------------
     @logFunction(channel="tac")
     def visitAssignment(self, ctx):
+        if getattr(self.v.emitter, "flow_terminated", False):
+            return None
         is_expr_ctx = isinstance(ctx, CompiscriptParser.ExpressionContext)
         exprs = self.expressionsFromCTX(ctx)
         n = len(exprs)
@@ -320,7 +346,8 @@ class TacStatements:
                         self.v.emitter.temp_pool.free(idx_place, "*")
                     if it_rhs:
                         self.v.emitter.temp_pool.free(rhs_place, "*")
-                    self.v.emitter.temp_pool.free(t_len, "*")
+                    if t_len:
+                        self.v.emitter.temp_pool.free(t_len, "*")
                     return None
 
                 # id = expr
@@ -390,7 +417,8 @@ class TacStatements:
                     self.v.emitter.temp_pool.free(idx_place, "*")
                 if it_rhs:
                     self.v.emitter.temp_pool.free(rhs_place, "*")
-                self.v.emitter.temp_pool.free(t_len, "*")
+                if t_len:
+                    self.v.emitter.temp_pool.free(t_len, "*")
                 return None
 
             # (prop) obj.prop = expr
@@ -411,10 +439,11 @@ class TacStatements:
             rhs_place = p_rhs or rhs_exp.getText()
 
             q = self.v.emitter.emit(Op.FIELD_STORE, arg1=obj_place, res=rhs_place, label=prop_name)
-            if it_obj and isinstance(obj_place, str) and obj_place.startswith("t"):
+            if it_obj:
                 self.v.emitter.temp_pool.free(obj_place, "*")
             if it_rhs:
                 self.v.emitter.temp_pool.free(rhs_place, "*")
+
             return None
 
         return None

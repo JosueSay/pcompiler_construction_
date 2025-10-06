@@ -21,7 +21,6 @@ class TacReturns:
         line = getattr(getattr(ctx, "start", None), "line", "?")
         log(f"[TAC][return] line={line}", channel="tac")
 
-        # Si no hay contexto de función, no emitimos quads (ya reportado en semántica).
         if not getattr(self.v, "fn_stack", None):
             self.v.stmt_just_terminated = "return"
             self.v.stmt_just_terminator_node = ctx
@@ -30,31 +29,35 @@ class TacReturns:
         expected = self.v.fn_stack[-1]
         has_expr = ctx.expression() is not None
 
-        # Función void: retornar sin valor (aunque el fuente tenga expresión).
+        def _end():
+            self.v.emitter.endFunctionWithReturn(None)
+            if hasattr(self.v.emitter, "markFlowTerminated"):
+                self.v.emitter.markFlowTerminated()
+            self.v.stmt_just_terminated = "return"
+            self.v.stmt_just_terminator_node = ctx
+            return {"terminated": True, "reason": "return"}
+
+        # void => return sin valor aunque el fuente traiga expr
+        from semantic.custom_types import VoidType
         if isinstance(expected, VoidType):
-            self.v.emitter.endFunctionWithReturn(None)
-            self.v.stmt_just_terminated = "return"
-            self.v.stmt_just_terminator_node = ctx
-            return {"terminated": True, "reason": "return"}
+            return _end()
 
-        # Función no-void sin expresión: retornar None (política conservadora).
+        # no-void sin expr => return None (política conservadora)
         if not has_expr:
-            self.v.emitter.endFunctionWithReturn(None)
-            self.v.stmt_just_terminated = "return"
-            self.v.stmt_just_terminator_node = ctx
-            return {"terminated": True, "reason": "return"}
+            return _end()
 
-        # Función no-void con expresión: evaluar y retornar su place.
+        # no-void con expr
         self.v.visit(ctx.expression())
         place, _ = deepPlace(ctx.expression())
         ret_place = place or ctx.expression().getText()
         self.v.emitter.endFunctionWithReturn(ret_place)
-
-        # Best-effort: liberar temporal del valor retornado si aplica.
         try:
             freeIfTemp(ctx.expression(), self.v.emitter.temp_pool, "*")
         except Exception:
             pass
+
+        if hasattr(self.v.emitter, "markFlowTerminated"):
+            self.v.emitter.markFlowTerminated()
 
         self.v.stmt_just_terminated = "return"
         self.v.stmt_just_terminator_node = ctx

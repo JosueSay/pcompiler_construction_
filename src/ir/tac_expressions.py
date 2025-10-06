@@ -92,6 +92,8 @@ class TacExpressions:
                 f_label = getattr(sym, "label", None) or f"f_{sym.name}"
                 self.v.emitter.emit(Op.MKCLOS, arg1=f_label, arg2=env_t, res=clos_t)
 
+                self.v.emitter.temp_pool.free(env_t, "*")
+
                 setPlace(ctx, clos_t, True)
                 return None
 
@@ -144,6 +146,7 @@ class TacExpressions:
         current_node = left_node
 
         i = 1
+        made_temp = False
         while i < len(children):
             op_txt = children[i].getText()
             right_node = children[i + 1]
@@ -157,11 +160,12 @@ class TacExpressions:
             freeIfTemp(right_node, self.v.emitter.temp_pool, "*")
             current_place = t
             current_node = ctx
+            made_temp = True
             i += 2
 
-        setPlace(ctx, current_place, str(current_place).startswith("t"))
+        setPlace(ctx, current_place, True if made_temp else isTempNode(left_node))
         return None
-
+    
     @logFunction(channel="tac")
     def visitMultiplicativeExpr(self, ctx):
         """
@@ -186,6 +190,8 @@ class TacExpressions:
 
         i = 1
         final_place = last_place
+        made_temp = False
+        
         while i < len(children):
             op_txt = children[i].getText()
             right_node = children[i + 1]
@@ -200,9 +206,14 @@ class TacExpressions:
             final_place = t
             last_place = right_place
             last_node = ctx
+            made_temp = True
             i += 2
 
-        setPlace(ctx, final_place, True)
+        if made_temp:
+            setPlace(ctx, final_place, True)
+        else:
+            setPlace(ctx, final_place, isTempNode(left_node))
+
         return None
 
     @logFunction(channel="tac")
@@ -227,6 +238,8 @@ class TacExpressions:
         current_node = left_node
 
         i = 1
+        made_temp = False
+        
         while i < len(children):
             right_node = children[i + 1]
             self.v.visit(right_node)
@@ -239,9 +252,10 @@ class TacExpressions:
             freeIfTemp(right_node, self.v.emitter.temp_pool, "*")
             current_place = t
             current_node = ctx
+            made_temp = True
             i += 2
 
-        setPlace(ctx, current_place, True)
+        setPlace(ctx, current_place, True if made_temp else isTempNode(left_node))
         return None
 
     @logFunction(channel="tac")
@@ -260,6 +274,7 @@ class TacExpressions:
         current_node = left_node
 
         i = 1
+        made_temp = False
         while i < len(children):
             right_node = children[i + 1]
             self.v.visit(right_node)
@@ -272,9 +287,10 @@ class TacExpressions:
             freeIfTemp(right_node, self.v.emitter.temp_pool, "*")
             current_place = t
             current_node = ctx
+            made_temp = True
             i += 2
 
-        setPlace(ctx, current_place, True)
+        setPlace(ctx, current_place, True if made_temp else isTempNode(left_node))
         return None
 
     @logFunction(channel="tac")

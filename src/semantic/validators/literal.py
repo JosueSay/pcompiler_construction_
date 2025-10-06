@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from antlr_gen.CompiscriptLexer import CompiscriptLexer
 from typing import Any
 from semantic.custom_types import IntegerType, StringType, BoolType, NullType, ErrorType
 from semantic.errors import SemanticError
@@ -34,22 +34,44 @@ def validateLiteral(text: str, error_list: list[SemanticError], ctx: Any | None 
     """
     log(f"Validating literal: {text}", channel="semantic")
 
-    if text.isdigit():
-        return IntegerType()
-    if text.startswith('"') and text.endswith('"'):
-        return StringType()
-    if text in ("true", "false"):
-        return BoolType()
+    tok = getattr(ctx, "start", None)
+
+    # 1) Si hay token, usarlo
+    if tok is not None:
+        ttype = tok.type
+
+        # Caso 1a: emite 'Literal'
+        if ttype == CompiscriptLexer.Literal:
+            # Distinguir por el contenido del token (seguro: es un único token)
+            ttxt = tok.text or text or ""
+            if ttxt.isdigit():
+                return IntegerType()
+            if len(ttxt) >= 2 and ttxt[0] == '"' and ttxt[-1] == '"':
+                return StringType()
+
+        if hasattr(CompiscriptLexer, "IntegerLiteral") and ttype == CompiscriptLexer.IntegerLiteral:
+            return IntegerType()
+        if hasattr(CompiscriptLexer, "StringLiteral") and ttype == CompiscriptLexer.StringLiteral:
+            return StringType()
+
+    # 2) Palabras clave (el parser ya las reconoce como literales)
     if text == "null":
         return NullType()
+    if text == "true" or text == "false":
+        return BoolType()
 
+    # 3) Fallback por texto (cuando no hubo token útil)
+    if text.isdigit():
+        return IntegerType()
+    if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+        return StringType()
+
+    # 4) Error
     line = getattr(getattr(ctx, "start", None), "line", None) if ctx else None
     column = getattr(getattr(ctx, "start", None), "column", None) if ctx else None
-    error = SemanticError(
+    error_list.append(SemanticError(
         message=f"Literal desconocido o inválido: {text}",
         line=line,
         column=column,
-    )
-    log(f"ERROR: {error}", channel="semantic")
-    error_list.append(error)
+    ))
     return ErrorType()

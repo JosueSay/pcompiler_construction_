@@ -9,76 +9,97 @@ class TacLValues:
     """
     Emite TAC para expresiones de lado izquierdo (LeftHandSide) y sus sufijos:
       - Indexación:    a[i]
-      - Llamadas:      f(a, b)  / método enlazado a un receptor
-      - Propiedades:   obj.campo  (lectura) / preparación de método para llamada
+      - Llamadas:      f(a, b) / método enlazado a un receptor
+      - Propiedades:   obj.campo (lectura) / preparación de método para llamada
 
-    Supone que la fase semántica ya validó tipos y registró metadatos necesarios.
-    No hace chequeos semánticos; sólo baja a quads.
+    Procesa suffixOp en orden izquierda→derecha y prepara correctamente el
+    “método enlazado” (receiver + label) antes del CallExpr.
     """
+
+    # --------------------------- util interno ----------------------------
+    def _sym_type(self, name: str):
+        """Resuelve el tipo de un símbolo local/global probando varios nombres de atributo."""
+        try:
+            sym = self.v.scopeManager.lookup(name)
+        except Exception:
+            sym = None
+        if not sym:
+            return None
+        for attr in ("type", "decl_type", "var_type", "declared_type", "inferred_type",
+                     "value_type", "init_value_type"):
+            t = getattr(sym, attr, None)
+            if t is not None:
+                return t
+        return None
+
+    # --------------------------------------------------------------------
 
     @logFunction(channel="tac")
     def __init__(self, v):
         log("[tac_lvalues] init", channel="tac")
         self.v = v
 
-    # --------------------------- núcleo ----------------------------
     @logFunction(channel="tac")
     def visitLeftHandSide(self, ctx: CompiscriptParser.LeftHandSideContext):
-        """
-        Aplica, en orden, cada sufijo del LHS produciendo los cuádruplos adecuados.
-        Publica en el nodo final su _place (temporal o receptor) para usos posteriores.
-        """
         log(f"[lvalues][TAC] enter LHS: '{ctx.getText()}'", channel="tac")
 
-        # 1) Átomo base (identificador, this, new, literal, (expr), etc.)
+        # 1) Átomo base
         base_node = ctx.primaryAtom()
-        self.v.visit(base_node)  # asegura _place en el átomo
-        base_place = getPlace(base_node) or base_node.getText()
+        self.v.visit(base_node)
+        p0, is_tmp0 = deepPlace(base_node)
+        base_place = p0 or base_node.getText()
+        base_is_temp = bool(is_tmp0)
 
-        # 2) Inferencia del tipo base (clave para decidir qué emitir)
+        # 2) Tipo base (de semántica / símbolos)
         base_type = getattr(base_node, "_type", None)
-
-        # this -> ClassType del owner del método actual
         if base_type is None and base_place == "this":
             owner = getattr(self.v, "current_method_owner", None)
             if owner:
                 base_type = ClassType(owner)
-
-        # Identificador u otros: intenta resolver por símbolos
         if base_type is None:
-            try:
-                sym = self.v.scopeManager.lookup(base_place)
-            except Exception:
-                sym = None
+            # buscar tipo del símbolo con heurística robusta
+            st = self._sym_type(base_place)
+            if st is not None:
+                base_type = st
+            else:
+                # función global
+                try:
+                    sym = self.v.scopeManager.lookup(base_place)
+                except Exception:
+                    sym = None
+                if sym is not None:
+                    from semantic.symbol_kinds import SymbolCategory
+                    if sym.category == SymbolCategory.FUNCTION:
+                        ftype = FunctionType(getattr(sym, "param_types", []) or [],
+                                             getattr(sym, "return_type", None) or VoidType())
+                        setattr(ftype, "_label", getattr(sym, "label", None) or f"f_{sym.name}")
+                        base_type = ftype
 
-            if sym is not None:
-                from semantic.symbol_kinds import SymbolCategory
-                if sym.category == SymbolCategory.FUNCTION:
-                    # Construir FunctionType con firma real y label para llamadas directas
-                    ftype = FunctionType(sym.param_types or [], sym.return_type or VoidType())
-                    setattr(ftype, "_label", getattr(sym, "label", None) or f"f_{sym.name}")
-                    base_type = ftype
-                else:
-                    base_type = getattr(sym, "type", None)
+        # 3) Sufijos encadenados (ordenados por tokenIndex izq→der)
+        try:
+            sufs = list(ctx.suffixOp())
+            sufs.sort(key=lambda n: getattr(getattr(n, "start", None), "tokenIndex", 0))
+        except Exception:
+            sufs = list(ctx.suffixOp())
 
-        # 3) Aplicar cada sufijo en orden
-        for suf in ctx.suffixOp():
+        for suf in sufs:
 
-            # 3.a) Indexación: a[i] -> INDEX_LOAD (con bounds opcional)
+            # 3.a) Indexación a[i]
             if isinstance(suf, CompiscriptParser.IndexExprContext):
                 if isinstance(base_type, ErrorType):
                     continue
 
-                self.v.visit(suf.expression())
-                idx_place = getattr(suf.expression(), "_place", suf.expression().getText())
+                idx_expr = suf.expression()
+                self.v.visit(idx_expr)
+                p_idx, is_idx_tmp = deepPlace(idx_expr)
+                idx_place = p_idx or idx_expr.getText()
 
                 elem_t = base_type.elem_type if isinstance(base_type, ArrayType) else None
                 temp_kind = typeToTempKind(elem_t) if elem_t is not None else "*"
                 t_val = self.v.emitter.temp_pool.newTemp(temp_kind)
 
-                # Bounds check best-effort (si el emitter lo soporta)
                 try:
-                    t_len, _l_ok = self.v.emitter.emitBoundsCheck(idx_place, base_place)
+                    t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, base_place)
                 except Exception:
                     t_len = None
 
@@ -86,32 +107,37 @@ class TacLValues:
 
                 if t_len:
                     self.v.emitter.temp_pool.free(t_len, "*")
-                if getattr(suf.expression(), "_is_temp", False):
+                if is_idx_tmp:
                     self.v.emitter.temp_pool.free(idx_place, "*")
+                if base_is_temp:
+                    self.v.emitter.temp_pool.free(base_place, "*")
 
                 base_place = t_val
+                base_is_temp = True
                 base_type = elem_t if elem_t is not None else base_type
                 setPlace(suf, base_place, True)
                 continue
 
-            # 3.b) Llamadas: f(...), incluyendo métodos enlazados a receptor
+            # 3.b) Llamadas: f(...), y métodos enlazados
             if isinstance(suf, CompiscriptParser.CallExprContext):
                 if isinstance(base_type, ErrorType):
                     continue
 
+                # Evalúa argumentos
                 args_nodes = list(suf.arguments().expression()) if suf.arguments() else []
                 for e in args_nodes:
                     self.v.visit(e)
 
                 n_params = 0
 
-                # Método enlazado: pasar receptor como primer parámetro
+                # Receiver (si es método enlazado)
                 recv_place = getattr(base_type, "_recv_place", None)
+                recv_is_temp = bool(getattr(base_type, "_recv_is_temp", False))
                 if recv_place is not None:
                     self.v.emitter.emit(Op.PARAM, arg1=recv_place)
                     n_params += 1
 
-                # Parámetros explícitos
+                # Args explícitos
                 for e in args_nodes:
                     p, is_tmp = deepPlace(e)
                     aplace = p or e.getText()
@@ -120,61 +146,69 @@ class TacLValues:
                         self.v.emitter.temp_pool.free(aplace, "*")
                     n_params += 1
 
-                # ¿Closure materializado?
-                clos_place = getattr(base_type, "_closure_place", None)
+                # Closure?
+                is_function_type = isinstance(base_type, FunctionType)
+                can_be_closure = is_function_type and recv_place is None and base_is_temp
                 ret_t = getattr(base_type, "return_type", None) or VoidType()
 
-                if clos_place:
-                    # Llamada a closure
+                if can_be_closure:
+                    clos_place = base_place
                     if isinstance(ret_t, VoidType):
                         self.v.emitter.emit(Op.CALLC, arg1=clos_place, arg2=str(n_params))
                         base_place = ""
+                        base_is_temp = False
                         setPlace(suf, "", False)
                     else:
                         t_ret = self.v.emitter.temp_pool.newTemp(typeToTempKind(ret_t))
                         self.v.emitter.emit(Op.CALLC, arg1=clos_place, arg2=str(n_params), res=t_ret)
                         base_place = t_ret
+                        base_is_temp = True
                         setPlace(suf, t_ret, True)
 
-                    if isinstance(clos_place, str) and clos_place.startswith("t"):
-                        self.v.emitter.temp_pool.free(clos_place, "*")
-                    if isinstance(recv_place, str) and recv_place.startswith("t"):
-                        self.v.emitter.temp_pool.free(recv_place, "*")
-
                     base_type = ret_t
+                    if recv_place is not None and recv_is_temp:
+                        self.v.emitter.temp_pool.free(recv_place, "*")
+                    self.v.emitter.temp_pool.free(clos_place, "*")
                     continue
 
-                # Llamada directa (función/método con label)
+                # Llamada directa (función o método)
                 f_label = getattr(base_type, "_label", None)
                 if f_label is None:
-                    base_name = getattr(ctx.primaryAtom(), "_place", None) or ctx.primaryAtom().getText()
-                    try:
-                        fsym = self.v.scopeManager.lookup(base_name)
-                        f_label = getattr(fsym, "label", None) or f"f_{base_name}"
-                    except Exception:
-                        f_label = f"f_{base_name}"
+                    owner = getattr(base_type, "_decl_owner", None)
+                    mname = getattr(base_type, "_method_name", None)
+                    if owner and mname:
+                        f_label = f"f_{owner}_{mname}"
+                    else:
+                        base_name = getattr(ctx.primaryAtom(), "_place", None) or ctx.primaryAtom().getText()
+                        try:
+                            fsym = self.v.scopeManager.lookup(base_name)
+                            f_label = getattr(fsym, "label", None) or f"f_{base_name}"
+                        except Exception:
+                            f_label = f"f_{base_name}"
 
                 if isinstance(ret_t, VoidType):
                     self.v.emitter.emit(Op.CALL, arg1=f_label, arg2=str(n_params))
                     base_place = ""
+                    base_is_temp = False
                     setPlace(suf, "", False)
                 else:
                     t_ret = self.v.emitter.temp_pool.newTemp(typeToTempKind(ret_t))
                     self.v.emitter.emit(Op.CALL, arg1=f_label, arg2=str(n_params), res=t_ret)
                     base_place = t_ret
+                    base_is_temp = True
                     setPlace(suf, t_ret, True)
 
-                if isinstance(recv_place, str) and recv_place.startswith("t"):
+                if recv_place is not None and recv_is_temp:
                     self.v.emitter.temp_pool.free(recv_place, "*")
 
                 base_type = ret_t
                 continue
 
-            # 3.c) Acceso a propiedad: obj.f  -> FIELD_LOAD  |  método enlazado
+            # 3.c) Acceso a propiedad: campo o método enlazado
             if isinstance(suf, CompiscriptParser.PropertyAccessExprContext):
                 prop_name = suf.Identifier().getText()
 
-                # Atributo de clase -> FIELD_LOAD
+                # Campo de clase → FIELD_LOAD
                 attr_t = None
                 if isinstance(base_type, ClassType):
                     attr_t = self.v.class_handler.getAttributeType(base_type.name, prop_name)
@@ -182,8 +216,6 @@ class TacLValues:
                 if attr_t is not None:
                     t_val = self.v.emitter.temp_pool.newTemp(typeToTempKind(attr_t))
                     q = self.v.emitter.emit(Op.FIELD_LOAD, arg1=base_place, res=t_val, label=prop_name)
-
-                    # Anotar offset/owner si está disponible
                     try:
                         off = self.v.class_handler.getFieldOffset(base_type.name, prop_name)
                         if q is not None and off is not None:
@@ -192,16 +224,26 @@ class TacLValues:
                     except Exception:
                         pass
 
+                    if base_is_temp:
+                        self.v.emitter.temp_pool.free(base_place, "*")
+
                     base_place = t_val
+                    base_is_temp = True
                     base_type = attr_t
                     setPlace(suf, base_place, True)
                     continue
 
-                # Método: construir FunctionType enlazado al receptor
+                # Método (con herencia) —> necesitamos el owner aunque base_type sea None
                 owner = getattr(base_type, "name", None)
+                if owner is None:
+                    st = self._sym_type(base_place)
+                    if isinstance(st, ClassType):
+                        owner = st.name
+                    elif base_place == "this":
+                        owner = getattr(self.v, "current_method_owner", None)
+
                 sig = self.v.method_registry.lookupMethod(f"{owner}.{prop_name}") if owner else None
                 if sig is None and owner:
-                    # Subir por herencia hasta encontrarlo
                     curr, seen = owner, set()
                     while curr and curr not in seen and sig is None:
                         seen.add(curr)
@@ -215,12 +257,15 @@ class TacLValues:
                     param_types, ret_t = sig
                     ret_t = ret_t or VoidType()
                     params_wo_this = param_types[1:] if len(param_types) > 0 else []
+
                     ftype = FunctionType(params_wo_this, ret_t)
                     try:
-                        setattr(ftype, "_bound_receiver", getattr(base_type, "name", None))
+                        setattr(ftype, "_bound_receiver", owner)
                         setattr(ftype, "_method_name", prop_name)
                         setattr(ftype, "_recv_place", base_place)
-                        setattr(ftype, "_decl_owner", owner or getattr(base_type, "name", None))
+                        setattr(ftype, "_recv_is_temp", base_is_temp)
+                        setattr(ftype, "_decl_owner", owner)
+
                         qname = f"{owner}.{prop_name}" if owner else prop_name
                         fsym = self.v.scopeManager.lookup(qname)
                         if fsym is not None and getattr(fsym, "label", None):
@@ -231,14 +276,14 @@ class TacLValues:
                         pass
 
                     base_type = ftype
-                    # Mantenemos base_place como receptor para la futura call()
-                    setPlace(suf, base_place, isinstance(base_place, str) and base_place.startswith("t"))
+                    # ¡ojo! mantenemos base_place (el receptor) para la call
+                    setPlace(suf, base_place, base_is_temp)
                     continue
 
-                # Ni atributo ni método conocido: no emitimos error aquí (semántica lo reporta)
+                # Ni atributo ni método: ya reportado por semántica
                 continue
 
-        # 4) Publicar place final
-        setPlace(ctx, base_place, isinstance(base_place, str) and str(base_place).startswith("t"))
+        # 4) Place final
+        setPlace(ctx, base_place, base_is_temp)
         log(f"[lvalues][TAC] exit LHS: type={base_type}, place={base_place}", channel="tac")
         return base_type

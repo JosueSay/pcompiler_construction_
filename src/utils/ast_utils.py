@@ -143,22 +143,21 @@ def firstSwitchDiscriminant(ctx) -> Any | None:
 @logFunction(channel="tac")
 def hasDefaultClause(ctx) -> bool:
     """Heurística para detectar si un switch tiene 'default'."""
-    default_ctx = getattr(CompiscriptParser, "DefaultClauseContext", None)
     try:
-        for i in range(ctx.getChildCount()):
-            ch = ctx.getChild(i)
-            if default_ctx is not None and isinstance(ch, default_ctx):
-                return True
-            if type(ch).__name__.lower().startswith("default") and type(ch).__name__.endswith("Context"):
-                return True
-    except Exception:
-        pass
-    try:
-        txt = ctx.getText()
-        if "default" in txt:
+        dc = getattr(ctx, "defaultCase", None)
+        if callable(dc) and dc() is not None:
             return True
     except Exception:
         pass
+    # Fallback por seguridad (no textual):
+    Default = getattr(CompiscriptParser, "DefaultCaseContext", None)
+    if Default:
+        try:
+            for ch in ctx.getChildren():
+                if isinstance(ch, Default):
+                    return True
+        except Exception:
+            pass
     return False
 
 

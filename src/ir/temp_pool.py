@@ -1,5 +1,7 @@
 from __future__ import annotations
+from collections import defaultdict
 
+VIEW_TEMP_PRINTS = True
 
 class TempPool:
     """
@@ -21,19 +23,28 @@ class TempPool:
     """
 
     def __init__(self) -> None:
-        self.next: int = 1              # contador por función
-        self.per_stmt: set[str] = set() # temporales creados en la sentencia actual
-        self.per_func: set[str] = set() # temporales creados en la función actual
+        self.next_id = 0
+        self._free = defaultdict(list)     # kind -> [tN, ...]
+        self.kind_of: dict[str, str] = {} # tN -> kind
+        self.leased_stmt: set[str] = set()
 
     def newTemp(self, kind: str = "*") -> str:
         """
         Devuelve un nuevo nombre temporal (tN). `kind` se ignora para el
         nombre pero se mantiene por compatibilidad con los llamadores.
         """
-        name = f"t{self.next}"
-        self.next += 1
-        self.per_stmt.add(name)
-        self.per_func.add(name)
+        k = kind or "*"
+        if self._free[k]:
+            name = self._free[k].pop()
+            if VIEW_TEMP_PRINTS:
+                print(f"[pool] reuse {name} ({k})")
+        else:
+            self.next_id += 1
+            name = f"t{self.next_id}"
+            self.kind_of[name] = k
+            if VIEW_TEMP_PRINTS:
+                print(f"[pool] alloc {name} ({k})")
+        self.leased_stmt.add(name)
         return name
 
     def free(self, name: str, kind: str = "*") -> None:
@@ -41,14 +52,26 @@ class TempPool:
         Gancho para liberar un temporal. No hace nada a propósito.
         Se conserva para no romper a los llamadores.
         """
-        return
+        if not name:
+            return
+        k = self.kind_of.get(name, kind or "*")
+        self._free[k].append(name)
+        self.leased_stmt.discard(name)
+        if VIEW_TEMP_PRINTS:
+            print(f"[pool] free  {name} ({k})")
 
     def resetPerStatement(self) -> None:
         """Marca el fin de una sentencia: limpiamos el set por-sentencia."""
-        self.per_stmt.clear()
+        for name in list(self.leased_stmt):
+            k = self.kind_of.get(name, "*")
+            self._free[k].append(name)
+            if VIEW_TEMP_PRINTS:
+                print(f"[pool] free  {name} ({k}) [resetPerStatement]")
+        self.leased_stmt.clear()
 
     def resetPerFunction(self) -> None:
         """Marca el inicio de una nueva función: reinicia numeración y sets."""
-        self.per_func.clear()
-        self.per_stmt.clear()
-        self.next = 1
+        self.next_id = 0
+        self._free.clear()
+        self.leased_stmt.clear()
+        self.kind_of.clear()

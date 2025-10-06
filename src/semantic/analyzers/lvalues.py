@@ -32,7 +32,15 @@ class LValuesAnalyzer:
         if hasattr(self.v, "emitter"):
             self.v.emitter.flow_terminated = True
         try:
+            # Tipo BASE del átomo (p.ej., 'b' en 'b.inc(5)')
             base_type = self.v.visit(ctx.primaryAtom())
+
+            # TAC lo leerá desde ctx.primaryAtom()._type para enlazar métodos.
+            try:
+                setattr(ctx.primaryAtom(), "_type", base_type)
+            except Exception:
+                pass
+
             lit_t = None
 
             # Pista de arreglo literal para validación de rangos estáticos
@@ -167,6 +175,12 @@ class LValuesAnalyzer:
                     continue
 
             log(f"[lvalues][SEM] resultado tipo={base_type}", channel="semantic")
+
+            try:
+                setattr(ctx, "_type", base_type)
+            except Exception:
+                pass
+
             return base_type
 
         finally:

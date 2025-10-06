@@ -28,6 +28,8 @@ class TacFunctions:
     def visitFunctionDeclaration(self, ctx: CompiscriptParser.FunctionDeclarationContext):
         """
         Emite prólogo, cuerpo y epílogo (return implícito si void) para una función global.
+        ADEMÁS: **siempre** cierra la función (endFunction / finishCurrentFunction) para
+        evitar que instrucciones posteriores queden dentro del mismo cuerpo.
         """
         name = ctx.Identifier().getText()
         fsym = findFunctionSymbol(self.v.scopeManager, name)
@@ -38,10 +40,13 @@ class TacFunctions:
         expected_ret = fsym.return_type if fsym.return_type is not None else VoidType()
 
         # --- prólogo ---
+        # Limpia cualquier barrera de flujo previa y abre la función.
         self.v.emitter.clearFlowTermination()
         frame_size = getattr(fsym, "local_frame_size", 0) or 0
         label = getattr(fsym, "label", None) or f"f_{name}"
         self.v.emitter.beginFunction(label, frame_size)
+        if hasattr(self.v.emitter, "temp_pool"):
+            self.v.emitter.temp_pool.resetPerStatement()
         log(f"[TAC] beginFunction: label={label}, frame_size={frame_size}", channel="tac")
 
         # Guardar/limpiar banderas externas para no contaminar scopes superiores
@@ -59,17 +64,49 @@ class TacFunctions:
             block_result = self.v.visit(ctx.block())
         finally:
             # Restaurar entorno del visitor
+            if hasattr(self.v, "fn_stack"):
+                try:
+                    self.v.fn_stack.pop()
+                except Exception:
+                    pass
             self.v.stmt_just_terminated = saved_term
             self.v.stmt_just_terminator_node = saved_node
-            if hasattr(self.v, "fn_stack"):
-                self.v.fn_stack.pop()
 
-        # --- return implícito si es void y el flujo no terminó adentro ---
-        if isinstance(expected_ret, VoidType) and not self.v.emitter.flow_terminated:
+        # Detectar si el flujo ya terminó dentro del bloque (por 'return')
+        terminated = False
+        try:
+            if isinstance(block_result, dict) and block_result.get("terminated"):
+                terminated = True
+        except Exception:
+            pass
+        terminated = terminated or bool(getattr(self.v.emitter, "flow_terminated", False))
+
+        # --- epílogo ---
+        # Si NO terminó adentro, garantizamos un return (implícito para void,
+        # conservador 'None' para no-void, consistente con TacReturns).
+        if not terminated:
             self.v.emitter.endFunctionWithReturn(None)
-            log(f"[TAC] return implícito en función void {name}", channel="tac")
+            if isinstance(expected_ret, VoidType):
+                log(f"[TAC] return implícito en función void {name}", channel="tac")
+            else:
+                log(f"[TAC][warn] función '{name}' no-void sin 'return' explícito; emitiendo return None.", channel="tac")
 
-        # limpiar barrera y salir
+        # *** CLAVE: CERRAR SIEMPRE LA FUNCIÓN ***
+        # Algunos emitters usan endFunction; otros finishCurrentFunction/finalizeFunction.
+        try:
+            if hasattr(self.v.emitter, "endFunction") and callable(self.v.emitter.endFunction):
+                self.v.emitter.endFunction()
+            else:
+                alt = (getattr(self.v.emitter, "finishCurrentFunction", None)
+                       or getattr(self.v.emitter, "finalizeFunction", None))
+                if callable(alt):
+                    alt()
+        except Exception as e:
+            log(f"[TAC][warn] no se pudo cerrar la función correctamente: {e}", channel="tac")
+
+        # Limpiar barrera para que el código de nivel superior no quede bloqueado
         self.v.emitter.clearFlowTermination()
+        if hasattr(self.v.emitter, "temp_pool"):
+            self.v.emitter.temp_pool.resetPerStatement()
         log(f"[TAC] fin función: {name}", channel="tac")
         return block_result

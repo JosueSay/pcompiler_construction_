@@ -104,6 +104,12 @@ def main(argv: list[str]) -> None:
 
     print(f"{CYAN}{BOLD}OUT DIR:{RESET} {out_dir}")
     print(f"{CYAN}{'='*120}{RESET}")
+    
+        # ---------- Imprimir TAC al finalizar ----------
+    print(f"{MAGENTA}{BOLD}=== TAC generado ==={RESET}")
+    with open(tac_txt, "r", encoding="utf-8") as f:
+        print(f.read())
+    print(f"{MAGENTA}{BOLD}===================={RESET}")
 
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+from antlr4.tree.Tree import TerminalNode
 from typing import Any
 from antlr_gen.CompiscriptParser import CompiscriptParser
 from logs.logger import log, logFunction
@@ -27,6 +28,19 @@ class TacControlFlow:
         self.loop_ctx_stack: list[dict[str, str]] = []
         self.switch_ctx_stack: list[dict[str, str]] = []
 
+    def unwrapCondCore(self, n):
+        # expression -> assignmentExpr -> conditionalExpr -> logicalOrExpr
+        if isinstance(n, CompiscriptParser.ExpressionContext):
+            a = n.assignmentExpr()
+            if a and hasattr(a, "conditionalExpr"):
+                c = a.conditionalExpr()
+                return self.unwrapCondCore(c or n)
+            return n
+        if isinstance(n, CompiscriptParser.ConditionalExprContext):
+            return n.logicalOrExpr() or n
+        return n
+
+
     # ---------------- Condiciones compuestas ----------------
 
     @logFunction(channel="tac")
@@ -37,20 +51,25 @@ class TacControlFlow:
           - cortocircuito para OR / AND
           - caso base: if cond goto Ltrue; goto Lfalse
         """
-        ctx_type = type(expr_ctx).__name__
-        txt = getattr(expr_ctx, "getText", lambda: "")()
+        node = self.unwrapCondCore(expr_ctx)
 
-        # !expr  → invierte destinos
-        if txt.startswith("!"):
-            inner = extractNotInner(expr_ctx)
-            if inner is not None:
-                self.visitCond(inner, l_false, l_true)
-                return
+        # !expr → invierte destinos (sin mirar texto completo)
+        if isinstance(expr_ctx, CompiscriptParser.UnaryExprContext) \
+        and expr_ctx.getChildCount() == 2 \
+        and expr_ctx.getChild(0).getText() == '!':
+            inner = expr_ctx.unaryExpr()
+            self.visitCond(inner, l_false, l_true)
+            return
 
         # expr || expr
-        if "LogicalOr" in ctx_type or (getattr(expr_ctx, "op", None) and maybeCall(expr_ctx.op).text == "||"):
-            left = safeAttr(expr_ctx, "left") or safeAttr(expr_ctx, "expression") or safeAttr(expr_ctx, "lhs")
-            right = safeAttr(expr_ctx, "right") or safeAttr(expr_ctx, "expression1") or safeAttr(expr_ctx, "rhs")
+        if isinstance(node, CompiscriptParser.LogicalOrExprContext):
+            left = node.logicalAndExpr(0)
+            right = node.logicalAndExpr(1) if node.getChildCount() >= 3 else None
+            if right is None:
+                # sin operador: cae a caso base
+                self.v.emitter.emitIfGoto(node.getText(), l_true)
+                self.v.emitter.emitGoto(l_false)
+                return
             l_mid = self.v.emitter.newLabel("Lor")
             self.visitCond(left, l_true, l_mid)
             self.v.emitter.emitLabel(l_mid)
@@ -58,17 +77,21 @@ class TacControlFlow:
             return
 
         # expr && expr
-        if "LogicalAnd" in ctx_type or (getattr(expr_ctx, "op", None) and maybeCall(expr_ctx.op).text == "&&"):
-            left = safeAttr(expr_ctx, "left") or safeAttr(expr_ctx, "expression") or safeAttr(expr_ctx, "lhs")
-            right = safeAttr(expr_ctx, "right") or safeAttr(expr_ctx, "expression1") or safeAttr(expr_ctx, "rhs")
+        if isinstance(node, CompiscriptParser.LogicalAndExprContext):
+            left = node.equalityExpr(0)
+            right = node.equalityExpr(1) if node.getChildCount() >= 3 else None
+            if right is None:
+                self.v.emitter.emitIfGoto(node.getText(), l_true)
+                self.v.emitter.emitGoto(l_false)
+                return
             l_mid = self.v.emitter.newLabel("Land")
             self.visitCond(left, l_mid, l_false)
             self.v.emitter.emitLabel(l_mid)
             self.visitCond(right, l_true, l_false)
             return
 
-        # Caso base: condición textual tal cual
-        self.v.emitter.emitIfGoto(txt, l_true)
+        # Caso base
+        self.v.emitter.emitIfGoto(node.getText(), l_true)
         self.v.emitter.emitGoto(l_false)
 
     # ---------------- if / else ----------------
@@ -176,43 +199,35 @@ class TacControlFlow:
 
     @logFunction(channel="tac")
     def emitForStep(self, step_ctx):
-        """
-        Emite el “step” del for. Si no parece una asignación, simplemente
-        visita la expresión por sus efectos colaterales.
-        """
         if step_ctx is None:
             return
 
-        txt = step_ctx.getText()
-        if not isAssignText(txt):
+        AssignCtx = getattr(CompiscriptParser, "AssignExprContext", None)
+        PropAssignCtx = getattr(CompiscriptParser, "PropertyAssignExprContext", None)
+
+        def contains(node, kinds):
+            try:
+                for ch in node.getChildren():
+                    if any(isinstance(ch, k) for k in kinds if k is not None):
+                        return True
+                    if contains(ch, kinds):
+                        return True
+            except Exception:
+                pass
+            return False
+
+        is_assign_like = contains(step_ctx, (AssignCtx, PropAssignCtx))
+
+        if is_assign_like:
+            # Usa la bajada de asignaciones de statements (que ya maneja ExpressionContext)
+            self.v.stmts.visitAssignment(step_ctx)
+        else:
+            # Efectos colaterales (p.ej., f(), i++)
             self.v.visit(step_ctx)
-            return
 
-        # LHS (nombre textual si no hay nodo dedicado)
-        lhs_node = getattr(step_ctx, "left", None) or getattr(step_ctx, "lhs", None)
-        lhs_place = lhs_node.getText().strip() if lhs_node is not None else splitAssignmentText(txt)[0]
+        # Vida de temporales del “step”
+        self.v.emitter.temp_pool.resetPerStatement()
 
-        # RHS
-        rhs_node = getattr(step_ctx, "right", None)
-        if rhs_node is None:
-            get_exprs = getattr(step_ctx, "expression", None)
-            if callable(get_exprs):
-                exprs = list(get_exprs() or [])
-                if exprs:
-                    rhs_node = exprs[-1]
-
-        if rhs_node is None:
-            # Último recurso: parsear el texto
-            _lhs_txt, rhs_text = splitAssignmentText(txt)
-            if lhs_place is None or rhs_text is None:
-                self.v.visit(step_ctx)
-                return
-            self.v.emitter.emitAssign(lhs_place, rhs_text)
-            return
-
-        self.v.visit(rhs_node)
-        rhs_place = getattr(rhs_node, "_place", rhs_node.getText().strip())
-        self.v.emitter.emitAssign(lhs_place, rhs_place)
 
     @logFunction(channel="tac")
     def visitForStatement(self, ctx: CompiscriptParser.ForStatementContext):
