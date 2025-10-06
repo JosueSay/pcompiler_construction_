@@ -19,13 +19,13 @@ def place_of_symbol(sym, *, fp_syntax: bool = True) -> str:
         return f"param[{sym.offset}]"
 
     if cls == "local":
-        # locals viven por debajo de FP
-        # OJO: tu FrameAllocator da offset = inicio del bloque del local;
-        # la dirección efectiva = FP - (offset + width)
+        # Mostrar locales con desplazamiento positivo como en el video
+        # (solo afecta a la representación textual, no a la semántica)
         disp = sym.offset + sym.width
         if fp_syntax:
-            return f"fp[-{disp}]"
+            return f"fp[{disp}]"
         return f"local[{sym.offset}]"
+
 
     # global
     if fp_syntax:

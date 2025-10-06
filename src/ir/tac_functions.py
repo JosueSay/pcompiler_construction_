@@ -82,27 +82,16 @@ class TacFunctions:
         terminated = terminated or bool(getattr(self.v.emitter, "flow_terminated", False))
 
         # --- epílogo ---
-        # Si NO terminó adentro, garantizamos un return (implícito para void,
-        # conservador 'None' para no-void, consistente con TacReturns).
         if not terminated:
-            self.v.emitter.endFunctionWithReturn(None)
             if isinstance(expected_ret, VoidType):
-                log(f"[TAC] return implícito en función void {name}", channel="tac")
-            else:
-                log(f"[TAC][warn] función '{name}' no-void sin 'return' explícito; emitiendo return None.", channel="tac")
-
-        # *** CLAVE: CERRAR SIEMPRE LA FUNCIÓN ***
-        # Algunos emitters usan endFunction; otros finishCurrentFunction/finalizeFunction.
-        try:
-            if hasattr(self.v.emitter, "endFunction") and callable(self.v.emitter.endFunction):
+                # Como en el video: cerrar sin RETURN explícito
                 self.v.emitter.endFunction()
+                log(f"[TAC] endFunction (sin return) en función void {name}", channel="tac")
+
             else:
-                alt = (getattr(self.v.emitter, "finishCurrentFunction", None)
-                       or getattr(self.v.emitter, "finalizeFunction", None))
-                if callable(alt):
-                    alt()
-        except Exception as e:
-            log(f"[TAC][warn] no se pudo cerrar la función correctamente: {e}", channel="tac")
+                # no-void -> return None (conservador y consistente con TacReturns)
+                self.v.emitter.endFunctionWithReturn("None")
+                log(f"[TAC][warn] función '{name}' no-void sin 'return' explícito; emitiendo return None.", channel="tac")
 
         # Limpiar barrera para que el código de nivel superior no quede bloqueado
         self.v.emitter.clearFlowTermination()

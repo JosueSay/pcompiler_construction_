@@ -2,6 +2,8 @@ from semantic.symbol_kinds import SymbolCategory
 from logs.logger import log, logFunction
 from utils.ast_utils import setPlace, getPlace, isTempNode, freeIfTemp, deepPlace
 from ir.tac import Op
+from ir.addr_format import place_of_symbol
+
 
 
 class TacExpressions:
@@ -101,8 +103,13 @@ class TacExpressions:
             setPlace(ctx, name, False)
             return None
 
-        # Variable / campo: el nombre textual es el place.
-        setPlace(ctx, name, False)
+        # Variable / campo: usar su dirección de frame/global para el 'place'
+        try:
+            sym = self.v.scopeManager.lookup(name)
+            addr = place_of_symbol(sym) if sym is not None else name
+        except Exception:
+            addr = name
+        setPlace(ctx, addr, False)
         return None
 
     @logFunction(channel="tac")

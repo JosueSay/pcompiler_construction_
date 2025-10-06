@@ -29,22 +29,24 @@ class TacReturns:
         expected = self.v.fn_stack[-1]
         has_expr = ctx.expression() is not None
 
-        def _end():
-            self.v.emitter.endFunctionWithReturn(None)
+        def _end(value=None):
+            # value: None  -> RETURN            (sin valor)
+            # value: "None"-> RETURN None       (literal None)
+            self.v.emitter.endFunctionWithReturn(value)
             if hasattr(self.v.emitter, "markFlowTerminated"):
                 self.v.emitter.markFlowTerminated()
             self.v.stmt_just_terminated = "return"
             self.v.stmt_just_terminator_node = ctx
             return {"terminated": True, "reason": "return"}
 
-        # void => return sin valor aunque el fuente traiga expr
-        from semantic.custom_types import VoidType
         if isinstance(expected, VoidType):
-            return _end()
-
-        # no-void sin expr => return None (política conservadora)
+            # funciones void: siempre sin valor
+            return _end(None)
+        
         if not has_expr:
-            return _end()
+            # no-void sin expresión: RETURN None (conservador)
+            return _end("None")
+
 
         # no-void con expr
         self.v.visit(ctx.expression())

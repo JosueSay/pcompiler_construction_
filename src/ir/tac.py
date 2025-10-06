@@ -82,6 +82,7 @@ class Quad:
         if o is Op.ENTER:
             return f"FUNCTION {self.arg1}:"
 
+
         if o is Op.LEAVE:
             return f"END FUNCTION {self.arg1}" if self.arg1 else "END FUNCTION"
 
@@ -89,17 +90,18 @@ class Quad:
             return "RETURN" if self.arg1 is None else f"RETURN {self.arg1}"
 
         if o is Op.PARAM:
-            return f"PARAM {self.arg1}"
+            return None
 
         if o is Op.CALL:
             if self.res:
-                return f"CALL {self.arg1}, {self.arg2}\n{self.res} := R"
-            return f"CALL {self.arg1}, {self.arg2}"
+                return f"CALL {self.arg1}\n{self.res} := R"
+            return f"CALL {self.arg1}"
 
         if o is Op.CALLC:
             if self.res:
-                return f"CALLC {self.arg1}, {self.arg2}\n{self.res} := R"
-            return f"CALLC {self.arg1}, {self.arg2}"
+                return f"CALLC {self.arg1}\n{self.res} := R"
+            return f"CALLC {self.arg1}"
+
 
         if o is Op.ASSIGN:
             return f"{self.res} := {self.arg1}"

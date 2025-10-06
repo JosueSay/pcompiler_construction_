@@ -3,6 +3,7 @@ from antlr_gen.CompiscriptParser import CompiscriptParser
 from logs.logger import log, logFunction
 from utils.ast_utils import deepPlace, isAssignText
 from ir.tac import Op
+from ir.addr_format import place_of_symbol
 
 
 class TacStatements:
@@ -376,10 +377,19 @@ class TacStatements:
                     self.v.visit(exprs[1])
                     p, it = deepPlace(exprs[1])
                     rhs_place = p or exprs[1].getText()
-                    self.v.emitter.emit(Op.ASSIGN, arg1=rhs_place, res=name)
+
+                    # destino = dirección del símbolo (fp[...], gp[...])
+                    try:
+                        sym = self.v.scopeManager.lookup(name)
+                        dst_place = place_of_symbol(sym) if sym is not None else name
+                    except Exception:
+                        dst_place = name
+
+                    self.v.emitter.emit(Op.ASSIGN, arg1=rhs_place, res=dst_place)
                     if it:
                         self.v.emitter.temp_pool.free(rhs_place, "*")
                 return None
+
             return None
 
         # AssignmentContext formal

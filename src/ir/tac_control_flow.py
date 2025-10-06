@@ -6,7 +6,7 @@ from utils.ast_utils import (
     walk, extractNotInner,
     asList, maybeCall, safeAttr, firstExpression,
     splitAssignmentText, isAssignText, collectStmtOrBlock,
-    firstSwitchDiscriminant, hasDefaultClause
+    firstSwitchDiscriminant, hasDefaultClause, deepPlace
 )
 
 
@@ -27,6 +27,7 @@ class TacControlFlow:
         self.v = v
         self.loop_ctx_stack: list[dict[str, str]] = []
         self.switch_ctx_stack: list[dict[str, str]] = []
+        self.while_seq: int = -1
 
     def unwrapCondCore(self, n):
         # expression -> assignmentExpr -> conditionalExpr -> logicalOrExpr
@@ -66,8 +67,15 @@ class TacControlFlow:
             and_terms = list(node.logicalAndExpr() or [])
             if len(and_terms) <= 1:
                 # Sin '||' real → caso base
-                self.v.emitter.emitIfGoto(node.getText(), l_true)
+                # Materializar la condición en TAC de expresiones para obtener un temporal
+                self.v.visit(node)
+                p, _ = deepPlace(node)
+                cond_place = p or node.getText()
+
+                # Usar forma 'IF t > 0' como en el video
+                self.v.emitter.emitIfGoto(f"{cond_place} > 0", l_true)
                 self.v.emitter.emitGoto(l_false)
+
                 return
 
             # A || B || C ...  → if A goto Ltrue; else evalúa resto
@@ -163,9 +171,12 @@ class TacControlFlow:
         cond_ctx = safeAttr(ctx, "expression") or safeAttr(ctx, "cond") or safeAttr(ctx, "condition")
         body = safeAttr(ctx, "statement") or safeAttr(ctx, "body") or safeAttr(ctx, "block")
 
-        l_start = self.v.emitter.newLabel("Lstart")
-        l_body = self.v.emitter.newLabel("Lbody")
-        l_end = self.v.emitter.newLabel("Lend")
+        self.while_seq += 1
+        wid = self.while_seq
+        l_start = f"STARTWHILE_{wid}"
+        l_body  = f"LABEL_TRUE_{wid}"
+        l_end   = f"ENDWHILE_{wid}"
+
 
         self.loop_ctx_stack.append({"break": l_end, "continue": l_start})
         self.v.loop_depth += 1

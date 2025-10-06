@@ -184,8 +184,10 @@ class Emitter:
 
         for q in self.quads:
             txt = q.toText()
-            parts = txt.splitlines() if isinstance(txt, str) and txt != "" else [""]
-
+            # Saltar quads sin representación textual (p.ej., PARAM oculto)
+            if not txt:
+                continue
+            parts = txt.splitlines()
             # No indentar: LABEL, ENTER (FUNCTION), LEAVE (END FUNCTION)
             if q.op in (Op.LABEL, Op.ENTER, Op.LEAVE):
                 lines.extend(parts)
