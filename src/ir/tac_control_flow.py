@@ -38,6 +38,7 @@ class TacControlFlow:
         self.loop_ctx_stack: list[dict[str, str]] = []
         self.switch_ctx_stack: list[dict[str, str]] = []
         self.while_seq: int = -1
+        self.if_seq: int = -1
 
         log(f"[TAC_CONTROL_FLOW] loop_ctx_stack initialized: {self.loop_ctx_stack}", channel="tac")
         log(f"[TAC_CONTROL_FLOW] switch_ctx_stack initialized: {self.switch_ctx_stack}", channel="tac")
@@ -150,23 +151,9 @@ class TacControlFlow:
 
     # ---------------- if / else ----------------
 
-    
     def visitIfStatement(self, ctx: CompiscriptParser.IfStatementContext):
         """
-        Emite TAC para un if / else:
-
-        Estructura:
-          IF cond GOTO Lthen
-          GOTO Lelse
-        Lthen:
-          ... then_stmt ...
-          GOTO Lend (si hay else)
-        Lelse:
-          ... else_stmt ...
-        Lend:
-          flujo continúa
-
-        Retorna dict indicando si el flujo termina dentro del if/else.
+        Emite TAC para un if / else
         """
         cond_ctx = firstExpression(ctx)
         if cond_ctx is None:
@@ -181,11 +168,14 @@ class TacControlFlow:
             log("\t[TAC][if] No then statement found, skipping", channel="tac")
             return {"terminated": False, "reason": None}
 
-        # --- Labels ---
-        l_then = self.v.emitter.newLabel("Lthen")
-        l_end = self.v.emitter.newLabel("Lend")
-        l_else = self.v.emitter.newLabel("Lelse") if else_stmt is not None else l_end
-        log(f"\n[TAC][if] Labels -> Lthen={l_then}, Lelse={l_else}, Lend={l_end}", channel="tac")
+        # --- IDs y labels (formato del video) ---
+        self.if_seq += 1
+        iid = self.if_seq
+        l_then = f"LABEL_TRUE_{iid}"
+        l_end  = f"ENDIF_{iid}"
+        l_else = f"LABEL_FALSE_{iid}" if else_stmt is not None else l_end
+
+        log(f"\n[TAC][if] Labels -> then={l_then}, else={l_else}, end={l_end}", channel="tac")
 
         # --- Condición ---
         log(f"\t[TAC][if] Visiting condition -> {cond_ctx.getText()}", channel="tac")
@@ -202,6 +192,7 @@ class TacControlFlow:
             self.v.emitter.emitLabel(l_else)
             log(f"\t[TAC][if] Entering ELSE block -> {l_else}", channel="tac")
             if bool(then_result.get("terminated")):
+                # si el THEN terminó (return/break/continue), limpiamos barrera para poder emitir el else
                 self.v.emitter.clearFlowTermination()
             else_result = self.v.visit(else_stmt) or {"terminated": False, "reason": None}
         else:
@@ -211,7 +202,7 @@ class TacControlFlow:
         self.v.emitter.emitLabel(l_end)
         log(f"\t[TAC][if] End IF/ELSE -> {l_end}", channel="tac")
 
-        # --- Flujo terminado ---
+        # --- Estado de terminación compuesto ---
         both_terminate = bool(then_result.get("terminated") and else_result.get("terminated"))
         if both_terminate:
             log(f"\t[TAC][if] Both THEN and ELSE blocks terminate", channel="tac")
@@ -222,7 +213,7 @@ class TacControlFlow:
         self.v.emitter.clearFlowTermination()
         self.v.stmt_just_terminated = None
         self.v.stmt_just_terminator_node = None
-        return {"terminated": False, "reason": None}
+        return {"terminated": False, "reason": None}    
 
 
     # ---------------- while ----------------

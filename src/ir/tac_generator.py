@@ -18,7 +18,7 @@ class TacGenerator(CompiscriptVisitor):
     Emite quads a través de `self.emitter`.
     """
 
-    @logFunction(channel="tac")
+    
     def __init__(self, base_semantic_visitor, emitter=None):
         log("[TacGenerator] init", channel="tac")
 
@@ -47,20 +47,48 @@ class TacGenerator(CompiscriptVisitor):
         self.treturns = TacReturns(self) if TacReturns is not None else None
         self.stmts    = TacStatements(self)
 
+
+    # Devuelve el primer nodo si la llamada retorna lista; si no, el propio valor
+    def h_First(self, ctx, name):
+        m = getattr(ctx, name, None)
+        if not callable(m):
+            return None
+        r = m()
+        if isinstance(r, list):
+            return r[0] if r else None
+        return r
+
+    # Devuelve el texto del primer Identifier (soporta lista o único)
+    def h_IdentText(self, ctx):
+        idm = getattr(ctx, "Identifier", None)
+        if not callable(idm):
+            return "<anon>"
+        
+        try:
+            tok = idm(0)          # si la signatura soporta índice
+            if tok is not None:
+                return tok.getText()
+        except TypeError:
+            pass
+        # Fallback: sin índice puede devolver lista o único
+        r = idm()
+        if isinstance(r, list):
+            r = r[0] if r else None
+        return r.getText() if r is not None else "<anon>"
+
     # ---------- Raíz ----------
-    @logFunction(channel="tac")
     def visitProgram(self, ctx: CompiscriptParser.ProgramContext):
         log("[TacGenerator] visitProgram - empezando a generar TAC a nivel toplevel", channel="tac")
 
         for st in ctx.statement():
-            cd = st.classDeclaration() if hasattr(st, "classDeclaration") else None
-            fd = st.functionDeclaration() if hasattr(st, "functionDeclaration") else None
+            cd = self.h_First(st, "classDeclaration")
+            fd = self.h_First(st, "functionDeclaration")
 
-            if cd:
-                log(f"[TacGenerator] visitProgram - clase detectada: {cd.Identifier().getText()}", channel="tac")
+            if cd is not None:
+                log(f"[TacGenerator] visitProgram - clase detectada: {self.h_IdentText(cd)}", channel="tac")
                 self.visitClassDeclaration(cd)
-            elif fd:
-                log(f"[TacGenerator] visitProgram - función detectada: {fd.Identifier().getText()}", channel="tac")
+            elif fd is not None:
+                log(f"[TacGenerator] visitProgram - función detectada: {self.h_IdentText(fd)}", channel="tac")
                 self.visitFunctionDeclaration(fd)
             else:
                 log("[TacGenerator] visitProgram - statement toplevel no clase/función", channel="tac")
@@ -70,14 +98,12 @@ class TacGenerator(CompiscriptVisitor):
         return None
 
     # ---------- Clases / Funciones ----------
-    @logFunction(channel="tac")
     def visitClassDeclaration(self, ctx: CompiscriptParser.ClassDeclarationContext):
-        log(f"[TacGenerator] visitClassDeclaration - clase: {ctx.Identifier().getText()}", channel="tac")
+        log(f"[TacGenerator] visitClassDeclaration - clase: {self.h_IdentText(ctx)}", channel="tac")
         return self.tmethods.visitClassDeclaration(ctx)
 
-    @logFunction(channel="tac")
     def visitFunctionDeclaration(self, ctx: CompiscriptParser.FunctionDeclarationContext):
-        log(f"[TacGenerator] visitFunctionDeclaration - función: {ctx.Identifier().getText()}", channel="tac")
+        log(f"[TacGenerator] visitFunctionDeclaration - función: {self.h_IdentText(ctx)}", channel="tac")
         return self.tfuncs.visitFunctionDeclaration(ctx)
 
     # ---------- Control de flujo ----------
@@ -90,7 +116,7 @@ class TacGenerator(CompiscriptVisitor):
     def visitContinueStatement(self, ctx):  return self.ctrl.visitContinueStatement(ctx)
 
     # ---------- Returns ----------
-    @logFunction(channel="tac")
+    
     def visitReturnStatement(self, ctx):
         log(f"[TacGenerator] visitReturnStatement - procesando return", channel="tac")
         if self.treturns is not None:

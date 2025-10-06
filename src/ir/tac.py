@@ -84,13 +84,13 @@ class Quad:
 
 
         if o is Op.LEAVE:
-            return f"END FUNCTION {self.arg1}" if self.arg1 else "END FUNCTION"
+            return f"END FUNCTION {self.arg1}\n\n" if self.arg1 else "END FUNCTION\n\n"
 
         if o is Op.RETURN:
             return "RETURN" if self.arg1 is None else f"RETURN {self.arg1}"
 
-        if o is Op.PARAM:
-            return None
+        if o == Op.PARAM:
+            return f"PARAM {self.arg1}"
 
         if o is Op.CALL:
             n = f", {self.arg2}" if self.arg2 is not None else ""
