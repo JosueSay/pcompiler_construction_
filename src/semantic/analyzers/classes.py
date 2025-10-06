@@ -160,7 +160,7 @@ class ClassesAnalyzer:
             return None
 
         # 4) Scope del método + parámetros
-        self.v.scopeManager.enterScope()
+        self.v.scopeManager.enterFunctionScope()
         self.v.in_method = True
         for pname, ptype in zip(param_names, param_types):
             try:

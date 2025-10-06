@@ -102,7 +102,7 @@ class FunctionsAnalyzer:
                     self.v.emitter.flow_terminated = old_barrier
 
         # ---- Abrir scope de función y registrar parámetros ----
-        self.v.scopeManager.enterScope()
+        self.v.scopeManager.enterFunctionScope()
         curr_fn_scope_id = self.v.scopeManager.currentScopeId()
         self.v.fn_ctx_stack.append({
             "scope_id": curr_fn_scope_id,

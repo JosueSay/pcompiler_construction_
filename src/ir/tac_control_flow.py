@@ -46,51 +46,66 @@ class TacControlFlow:
     @logFunction(channel="tac")
     def visitCond(self, expr_ctx, l_true: str, l_false: str) -> None:
         """
-        Emite saltos para una condición, manejando:
-          - negación unaria al frente (!expr)
-          - cortocircuito para OR / AND
-          - caso base: if cond goto Ltrue; goto Lfalse
+        Emite saltos con cortocircuito:
+          - !E        → invierte destinos
+          - A || B .. → evalúa izquierda→derecha, si true salta a Ltrue
+          - A && B .. → evalúa izquierda→derecha, si false salta a Lfalse
+          - Base      → IF cond GOTO Ltrue ; GOTO Lfalse
         """
+        # 0) Manejo de negación unaria en cualquier profundidad razonable.
+        neg_inner = extractNotInner(expr_ctx)
+        if neg_inner is not None:
+            self.visitCond(neg_inner, l_false, l_true)
+            return
+
         node = self.unwrapCondCore(expr_ctx)
 
-        # !expr → invierte destinos (sin mirar texto completo)
-        if isinstance(expr_ctx, CompiscriptParser.UnaryExprContext) \
-        and expr_ctx.getChildCount() == 2 \
-        and expr_ctx.getChild(0).getText() == '!':
-            inner = expr_ctx.unaryExpr()
-            self.visitCond(inner, l_false, l_true)
-            return
-
-        # expr || expr
-        if isinstance(node, CompiscriptParser.LogicalOrExprContext):
-            left = node.logicalAndExpr(0)
-            right = node.logicalAndExpr(1) if node.getChildCount() >= 3 else None
-            if right is None:
-                # sin operador: cae a caso base
+        # 1) OR: logicalOrExpr ::= logicalAndExpr ('||' logicalAndExpr)*
+        OrCtx = getattr(CompiscriptParser, "LogicalOrExprContext", None)
+        if OrCtx is not None and isinstance(node, OrCtx):
+            and_terms = list(node.logicalAndExpr() or [])
+            if len(and_terms) <= 1:
+                # Sin '||' real → caso base
                 self.v.emitter.emitIfGoto(node.getText(), l_true)
                 self.v.emitter.emitGoto(l_false)
                 return
-            l_mid = self.v.emitter.newLabel("Lor")
-            self.visitCond(left, l_true, l_mid)
-            self.v.emitter.emitLabel(l_mid)
-            self.visitCond(right, l_true, l_false)
+
+            # A || B || C ...  → if A goto Ltrue; else evalúa resto
+            # Vamos encadenando labels intermedios para continuar.
+            next_label = None
+            for k, term in enumerate(and_terms):
+                is_last = (k == len(and_terms) - 1)
+                if is_last:
+                    # Último: decide definitivamente
+                    self.visitCond(term, l_true, l_false)
+                else:
+                    next_label = self.v.emitter.newLabel("Lor")
+                    self.visitCond(term, l_true, next_label)
+                    self.v.emitter.emitLabel(next_label)
             return
 
-        # expr && expr
-        if isinstance(node, CompiscriptParser.LogicalAndExprContext):
-            left = node.equalityExpr(0)
-            right = node.equalityExpr(1) if node.getChildCount() >= 3 else None
-            if right is None:
+        # 2) AND: logicalAndExpr ::= equalityExpr ('&&' equalityExpr)*
+        AndCtx = getattr(CompiscriptParser, "LogicalAndExprContext", None)
+        if AndCtx is not None and isinstance(node, AndCtx):
+            eq_terms = list(node.equalityExpr() or [])
+            if len(eq_terms) <= 1:
                 self.v.emitter.emitIfGoto(node.getText(), l_true)
                 self.v.emitter.emitGoto(l_false)
                 return
-            l_mid = self.v.emitter.newLabel("Land")
-            self.visitCond(left, l_mid, l_false)
-            self.v.emitter.emitLabel(l_mid)
-            self.visitCond(right, l_true, l_false)
+
+            # A && B && C ... → si A false salta a Lfalse; si true evalúa resto
+            next_label = None
+            for k, term in enumerate(eq_terms):
+                is_last = (k == len(eq_terms) - 1)
+                if is_last:
+                    self.visitCond(term, l_true, l_false)
+                else:
+                    next_label = self.v.emitter.newLabel("Land")
+                    self.visitCond(term, next_label, l_false)
+                    self.v.emitter.emitLabel(next_label)
             return
 
-        # Caso base
+        # 3) Caso base: condición como texto (el backend de ejecución la evalúa).
         self.v.emitter.emitIfGoto(node.getText(), l_true)
         self.v.emitter.emitGoto(l_false)
 

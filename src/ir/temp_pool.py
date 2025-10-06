@@ -1,7 +1,6 @@
 from __future__ import annotations
 from collections import defaultdict
-
-VIEW_TEMP_PRINTS = True
+from logs.logger import log
 
 class TempPool:
     """
@@ -35,15 +34,14 @@ class TempPool:
         """
         k = kind or "*"
         if self._free[k]:
-            name = self._free[k].pop()
-            if VIEW_TEMP_PRINTS:
-                print(f"[pool] reuse {name} ({k})")
+            name = self._free[k].pop()        
+            log(f"[pool] reuse {name} ({k})", channel="tac")
+                
         else:
             self.next_id += 1
             name = f"t{self.next_id}"
             self.kind_of[name] = k
-            if VIEW_TEMP_PRINTS:
-                print(f"[pool] alloc {name} ({k})")
+            log(f"[pool] alloc {name} ({k})", channel="tac")
         self.leased_stmt.add(name)
         return name
 
@@ -57,16 +55,14 @@ class TempPool:
         k = self.kind_of.get(name, kind or "*")
         self._free[k].append(name)
         self.leased_stmt.discard(name)
-        if VIEW_TEMP_PRINTS:
-            print(f"[pool] free  {name} ({k})")
+        log(f"[pool] free  {name} ({k})", channel="tac")
 
     def resetPerStatement(self) -> None:
         """Marca el fin de una sentencia: limpiamos el set por-sentencia."""
         for name in list(self.leased_stmt):
             k = self.kind_of.get(name, "*")
             self._free[k].append(name)
-            if VIEW_TEMP_PRINTS:
-                print(f"[pool] free  {name} ({k}) [resetPerStatement]")
+            log(f"[pool] free  {name} ({k}) [resetPerStatement]", channel="tac")
         self.leased_stmt.clear()
 
     def resetPerFunction(self) -> None:

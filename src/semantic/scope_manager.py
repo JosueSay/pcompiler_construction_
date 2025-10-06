@@ -46,6 +46,8 @@ class ScopeManager:
         self.scope_stack: list[int] = [0]
         # Generador de IDs crecientes (el próximo que asigne enterScope()).
         self.next_scope_id: int = 0
+        
+        self.frame_stack: list[FrameAllocator] = []
 
     # ----------------- Estado/IDs -----------------
 
@@ -76,6 +78,26 @@ class ScopeManager:
         self.scope_stack.pop()
         return size
 
+    def enterFunctionScope(self) -> int:
+        """
+        Igual a enterScope(), pero además abre un FrameAllocator para esta función.
+        """
+        sid = self.enterScope()
+        self.frame_stack.append(FrameAllocator())
+        return sid
+
+    def currentFrame(self) -> FrameAllocator | None:
+        return self.frame_stack[-1] if self.frame_stack else None
+
+    def exitScope(self) -> int:
+        # igual que antes
+        size = self.offsets[-1]
+        self.scopes.pop()
+        self.offsets.pop()
+        self.scope_stack.pop()
+        return size
+
+
     # ----------------- Info del frame -----------------
 
     def currentStorage(self) -> str:
@@ -91,7 +113,8 @@ class ScopeManager:
         Tamaño actual (bytes) del frame del scope activo.
         Útil para anotar `local_frame_size` al cerrar una función.
         """
-        return self.offsets[-1]
+        fr = self.currentFrame()
+        return fr.local_size() if fr is not None else self.offsets[-1]
 
     # ----------------- Altas de símbolos -----------------
 
@@ -119,10 +142,31 @@ class ScopeManager:
             raise Exception(f"Símbolo '{name}' ya declarado en este ámbito.")
 
         width = 0 if category == SymbolCategory.FUNCTION else getTypeWidth(type_)
-        offset = self.offsets[-1]
         storage = self.currentStorage()
         is_ref = isReferenceType(type_)
-        addr_class = "param" if category == SymbolCategory.PARAMETER else storage
+
+        fr = self.currentFrame()
+        if storage == "global":
+            # global: igual que antes
+            offset = self.offsets[0]
+            addr_class = "global"
+            self.offsets[0] += width
+        else:
+            # stack: estamos en función o en bloque fuera de función (raro)
+            if fr is not None:
+                if category == SymbolCategory.PARAMETER:
+                    offset = fr.alloc_param(width)
+                    addr_class = "param"
+                else:
+                    offset = fr.alloc_local(width)
+                    addr_class = "local"
+                # mantenemos offsets[-1] solo como contador “legacy” de este scope
+                self.offsets[-1] += width
+            else:
+                # stack sin frame: conservar comportamiento previo
+                offset = self.offsets[-1]
+                addr_class = storage
+                self.offsets[-1] += width
 
         symbol = Symbol(
             name=name,
@@ -139,8 +183,8 @@ class ScopeManager:
             is_ref=is_ref,
         )
         self.scopes[-1][name] = symbol
-        self.offsets[-1] += width
         return symbol
+
 
     def addSymbolGlobal(
         self,
@@ -202,9 +246,27 @@ class ScopeManager:
 
     def closeFunctionScope(self, func_symbol: Symbol) -> int:
         """
-        Cierra el scope de una función, calcula su `local_frame_size` a partir
-        del tamaño del frame del ámbito que se cierra, y lo devuelve.
+        Cierra el scope de función y fija el tamaño REAL de locales (no incluye parámetros).
         """
-        size = self.exitScope()
-        func_symbol.local_frame_size = size
-        return size
+        fr = self.currentFrame()
+        locals_size = fr.local_size() if fr is not None else 0
+        self.exitScope()
+        if self.frame_stack:
+            self.frame_stack.pop()
+        func_symbol.local_frame_size = locals_size
+        return locals_size
+
+class FrameAllocator:
+    def __init__(self):
+        self.param_off = 0  # bytes desde inicio zona parámetros
+        self.local_off = 0  # bytes reservados para locales
+    def alloc_param(self, width: int) -> int:
+        off = self.param_off
+        self.param_off += width
+        return off
+    def alloc_local(self, width: int) -> int:
+        off = self.local_off
+        self.local_off += width
+        return off
+    def local_size(self) -> int:
+        return self.local_off
