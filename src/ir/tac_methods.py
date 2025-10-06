@@ -61,7 +61,7 @@ class TacMethods:
         # --- Prólogo ---
         self.v.emitter.clearFlowTermination()
         frame_size = fsym.local_frame_size if getattr(fsym, "local_frame_size", None) is not None else 0
-        func_label = fsym.label or f"f_{current_class}_{method_name}"
+        func_label = fsym.label or f"{current_class}_{method_name}"
         self.v.emitter.beginFunction(func_label, frame_size)
         log(f"[TAC] beginFunction: label={func_label}, frame_size={frame_size}", channel="tac")
 

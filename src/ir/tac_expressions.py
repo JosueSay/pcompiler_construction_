@@ -89,7 +89,7 @@ class TacExpressions:
                 self.v.emitter.emit(Op.MKENV, arg1=args_txt, res=env_t)
 
                 clos_t = self.v.emitter.temp_pool.newTemp("ref")
-                f_label = getattr(sym, "label", None) or f"f_{sym.name}"
+                f_label = getattr(sym, "label", None) or f"{sym.name}"
                 self.v.emitter.emit(Op.MKCLOS, arg1=f_label, arg2=env_t, res=clos_t)
 
                 self.v.emitter.temp_pool.free(env_t, "*")
@@ -352,7 +352,7 @@ class TacExpressions:
                 if is_tmp:
                     self.v.emitter.temp_pool.free(aplace, "*")
                 n_params += 1
-            f_label = f"f_{ctor_owner}_constructor"
+            f_label = f"{ctor_owner}_constructor"
             self.v.emitter.emit(Op.CALL, arg1=f_label, arg2=str(n_params))
 
         setPlace(ctx, t_obj, True)

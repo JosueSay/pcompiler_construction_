@@ -72,7 +72,7 @@ class TacLValues:
                     if sym.category == SymbolCategory.FUNCTION:
                         ftype = FunctionType(getattr(sym, "param_types", []) or [],
                                              getattr(sym, "return_type", None) or VoidType())
-                        setattr(ftype, "_label", getattr(sym, "label", None) or f"f_{sym.name}")
+                        setattr(ftype, "_label", getattr(sym, "label", None) or f"{sym.name}")
                         base_type = ftype
 
         # 3) Sufijos encadenados (ordenados por tokenIndex izq→der)
@@ -177,14 +177,14 @@ class TacLValues:
                     owner = getattr(base_type, "_decl_owner", None)
                     mname = getattr(base_type, "_method_name", None)
                     if owner and mname:
-                        f_label = f"f_{owner}_{mname}"
+                        f_label = f"{owner}_{mname}"
                     else:
                         base_name = getattr(ctx.primaryAtom(), "_place", None) or ctx.primaryAtom().getText()
                         try:
                             fsym = self.v.scopeManager.lookup(base_name)
-                            f_label = getattr(fsym, "label", None) or f"f_{base_name}"
+                            f_label = getattr(fsym, "label", None) or f"{base_name}"
                         except Exception:
-                            f_label = f"f_{base_name}"
+                            f_label = f"{base_name}"
 
                 if isinstance(ret_t, VoidType):
                     self.v.emitter.emit(Op.CALL, arg1=f_label, arg2=str(n_params))
@@ -271,7 +271,7 @@ class TacLValues:
                         if fsym is not None and getattr(fsym, "label", None):
                             setattr(ftype, "_label", fsym.label)
                         else:
-                            setattr(ftype, "_label", f"f_{owner}_{prop_name}" if owner else f"f_{prop_name}")
+                            setattr(ftype, "_label", f"{owner}_{prop_name}" if owner else f"{prop_name}")
                     except Exception:
                         pass
 

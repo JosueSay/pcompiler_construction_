@@ -43,7 +43,7 @@ class TacFunctions:
         # Limpia cualquier barrera de flujo previa y abre la función.
         self.v.emitter.clearFlowTermination()
         frame_size = getattr(fsym, "local_frame_size", 0) or 0
-        label = getattr(fsym, "label", None) or f"f_{name}"
+        label = getattr(fsym, "label", None) or f"{name}"
         self.v.emitter.beginFunction(label, frame_size)
         if hasattr(self.v.emitter, "temp_pool"):
             self.v.emitter.temp_pool.resetPerStatement()

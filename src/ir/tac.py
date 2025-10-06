@@ -71,43 +71,49 @@ class Quad:
             return f"{self.res}:"
 
         if o is Op.GOTO:
-            return f"goto {self.arg1}"
+            return f"GOTO {self.arg1}"
 
         if o is Op.IF_GOTO:
-            return f"if {self.arg1} goto {self.arg2}"
+            return f"IF {self.arg1} GOTO {self.arg2}"
 
         if o is Op.IF_FALSE_GOTO:
-            return f"ifFalse {self.arg1} goto {self.arg2}"
+            return f"IF_FALSE {self.arg1} GOTO {self.arg2}"
 
         if o is Op.ENTER:
-            return f"enter {self.arg1}, {self.arg2}"
+            return f"FUNCTION {self.arg1}:"
 
         if o is Op.LEAVE:
-            return "leave"
+            return f"END FUNCTION {self.arg1}" if self.arg1 else "END FUNCTION"
 
         if o is Op.RETURN:
-            return "return" if self.arg1 is None else f"return {self.arg1}"
+            return "RETURN" if self.arg1 is None else f"RETURN {self.arg1}"
 
         if o is Op.PARAM:
-            return f"param {self.arg1}"
+            return f"PARAM {self.arg1}"
 
         if o is Op.CALL:
-            return f"{self.res} = call {self.arg1}, {self.arg2}" if self.res else f"call {self.arg1}, {self.arg2}"
+            if self.res:
+                return f"CALL {self.arg1}, {self.arg2}\n{self.res} := R"
+            return f"CALL {self.arg1}, {self.arg2}"
 
         if o is Op.CALLC:
-            return f"{self.res} = callc {self.arg1}, {self.arg2}" if self.res else f"callc {self.arg1}, {self.arg2}"
+            if self.res:
+                return f"CALLC {self.arg1}, {self.arg2}\n{self.res} := R"
+            return f"CALLC {self.arg1}, {self.arg2}"
 
         if o is Op.ASSIGN:
-            return f"{self.res} = {self.arg1}"
+            return f"{self.res} := {self.arg1}"
 
         if o is Op.UNARY:
             op_txt = str(self.label or "")
-            # Formato compacto: "t1 = - x" o "t1 = ! x"
-            return f"{self.res} = {op_txt} {self.arg1}".strip()
+            # "t1 := - x" o "t1 := ! x"
+            return f"{self.res} := {op_txt} {self.arg1}".strip()
+
 
         if o is Op.BINARY:
             op_txt = str(self.label or "?")
-            return f"{self.res} = {self.arg1} {op_txt} {self.arg2}"
+            return f"{self.res} := {self.arg1} {op_txt} {self.arg2}"
+
 
         if o is Op.INDEX_LOAD:
             return f"{self.res} = {self.arg1}[{self.arg2}]"

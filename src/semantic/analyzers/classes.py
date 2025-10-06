@@ -149,7 +149,7 @@ class ClassesAnalyzer:
             )
             fsym.param_types = param_types
             fsym.return_type = rtype
-            fsym.label = f"f_{current_class}_{method_name}"
+            fsym.label = f"{current_class}_{method_name}"
             self.v.method_registry.registerMethod(qname, param_types, rtype)
             log(
                 f"[method] (SEM) declarada: {qname}({', '.join(param_names)}) -> {rtype if rtype else 'void?'}",

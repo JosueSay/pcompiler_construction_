@@ -76,7 +76,7 @@ class ExpressionsAnalyzer:
             ftype = FunctionType(sym.param_types, rtype)
             # anotar label para futuras llamadas (lectura por TAC)
             try:
-                setattr(ftype, "_label", getattr(sym, "label", None) or f"f_{sym.name}")
+                setattr(ftype, "_label", getattr(sym, "label", None) or f"{sym.name}")
             except Exception:
                 pass
             return ftype

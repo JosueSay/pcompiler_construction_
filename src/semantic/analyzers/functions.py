@@ -30,7 +30,7 @@ class FunctionsAnalyzer:
           - (Si está anidada en clase) f_<Class>_<name>
         """
         owner = self.v.class_stack[-1] if getattr(self.v, "class_stack", None) else None
-        label = f"f_{owner}_{name}" if owner else f"f_{name}"
+        label = f"{owner}_{name}" if owner else f"{name}"
         log(f"[makeFuncLabel] name='{name}', owner='{owner}' -> label='{label}'", channel="semantic")
         return label
 

@@ -26,6 +26,8 @@ class Emitter:
         self.temp_pool = TempPool()
         self.header_lines: list[str] = []
         self.flow_terminated: bool = False
+        self.current_function: str | None = None
+
 
         self.addHeaderLine("; Compiscript TAC")
         self.addHeaderLine(f"; program: {self.program_name}")
@@ -144,9 +146,9 @@ class Emitter:
         - limpia barrera de flujo
         - emite etiqueta y `enter`
         """
+        self.current_function = func_label
         self.temp_pool.resetPerFunction()
         self.clearFlowTermination()
-        self.emitLabel(func_label)
         size_text = str(local_frame_size if local_frame_size is not None else 0)
         self.emit(Op.ENTER, arg1=func_label, arg2=size_text)
 
@@ -160,6 +162,8 @@ class Emitter:
             self.emit(Op.RETURN, arg1=value_place)
         else:
             self.emit(Op.RETURN)
+            
+        self.emit(Op.LEAVE, arg1=self.current_function)
         self.markFlowTerminated()
 
     def endFunction(self) -> None:
@@ -167,7 +171,7 @@ class Emitter:
         Cierre explícito sin `return`. Útil para prólogos/epílogos sintéticos.
         Normalmente no se usa si `endFunctionWithReturn` ya cerró el flujo.
         """
-        self.emit(Op.LEAVE)
+        self.emit(Op.LEAVE, arg1=self.current_function)
         self.markFlowTerminated()
 
 
@@ -177,12 +181,21 @@ class Emitter:
         lines: list[str] = list(self.header_lines)
         if lines and lines[-1] != "":
             lines.append("")
+
         for q in self.quads:
-            if q.op == Op.LABEL:
-                lines.append(q.toText())
+            txt = q.toText()
+            parts = txt.splitlines() if isinstance(txt, str) and txt != "" else [""]
+
+            # No indentar: LABEL, ENTER (FUNCTION), LEAVE (END FUNCTION)
+            if q.op in (Op.LABEL, Op.ENTER, Op.LEAVE):
+                lines.extend(parts)
             else:
-                lines.append("\t" + q.toText())
+                lines.extend(["\t" + p for p in parts])
+
         return "\n".join(lines) + "\n"
+
+
+
 
     def writeTacText(self, out_dir: str, stem: str, *, simple_names: bool = False) -> str:
         """
