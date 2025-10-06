@@ -8,28 +8,21 @@ class TacFunctions:
     """
     Generación de TAC para **funciones globales** (no métodos de clase).
 
-    Supuestos previos:
-      - La fase semántica ya resolvió símbolos: etiqueta, tamaño de frame y tipo de retorno.
-    
-    Responsabilidades:
-      - Emitir prólogo (beginFunction).
-      - Emitir cuerpo TAC (visit block).
-      - Emitir epílogo (return implícito si void, return None si no-void).
-      - Garantizar cierre de la función aunque el bloque no tenga return explícito.
+    Supuestos:
+      - La fase semántica ya resolvió: label, local_frame_size, return_type y fn_scope_id.
     """
 
-    @logFunction(channel="tac")
     def __init__(self, v):
         log("\n" + "="*80, channel="tac")
         log("[TAC_FUNCTIONS] Init TacFunctions", channel="tac")
         log("="*80 + "\n", channel="tac")
         self.v = v
 
-    @logFunction(channel="tac")
     def visitFunctionDeclaration(self, ctx: CompiscriptParser.FunctionDeclarationContext):
         """
-        Emite prólogo, cuerpo y epílogo (return implícito si void o return None si no-void).
-        Siempre cierra la función para que código posterior no se quede dentro del scope.
+        Emite prólogo, cuerpo (una única visita) y epílogo.
+        - Si void y no hubo return: endFunction implícito.
+        - Si no-void y no hubo return: endFunctionWithReturn(None).
         """
         name = ctx.Identifier().getText()
         fsym = findFunctionSymbol(self.v.scopeManager, name)
@@ -56,25 +49,61 @@ class TacFunctions:
         if hasattr(self.v.emitter, "temp_pool"):
             self.v.emitter.temp_pool.resetPerStatement()
 
+        # --- Contexto: fn_stack + scope del cuerpo ---
+        sm = self.v.scopeManager
+        func_scope_id = getattr(fsym, "fn_scope_id", None)
+        pushed = False
+
         # Guardar/limpiar banderas externas
         saved_term = getattr(self.v, "stmt_just_terminated", None)
         saved_node = getattr(self.v, "stmt_just_terminator_node", None)
         self.v.stmt_just_terminated = None
         self.v.stmt_just_terminator_node = None
 
-        # Contexto de retorno
+        # Empujar tipo de retorno esperado
         if hasattr(self.v, "fn_stack"):
             self.v.fn_stack.append(expected_ret)
+            log(f"[TacFunctions] fn_stack.push({expected_ret}); depth={len(self.v.fn_stack)}", channel="tac")
 
-        # --- Cuerpo ---
+        log(f"[TacFunctions] Using fn_scope_id={func_scope_id}", channel="tac")
         try:
+            if func_scope_id is not None:
+                if hasattr(sm, "pushScopeById"):
+                    sm.pushScopeById(func_scope_id)
+                    pushed = True
+                    log(f"[TacFunctions] Entered scope (pushScopeById) {func_scope_id}", channel="tac")
+                elif hasattr(sm, "enterScopeById"):
+                    sm.enterScopeById(func_scope_id)
+                    pushed = True
+                    log(f"[TacFunctions] Entered scope (enterScopeById) {func_scope_id}", channel="tac")
+                else:
+                    log(f"[TacFunctions][WARN] ScopeManager no expone enter/pushScopeById; no se reactivó el scope.", channel="tac")
+            else:
+                log(f"[TacFunctions][WARN] Función '{name}' sin fn_scope_id; se usa scope actual", channel="tac")
+
+            # --- Cuerpo (una sola visita) ---
+            log(f"[TacFunctions] Visiting function body of {name}", channel="tac")
             block_result = self.v.visit(ctx.block())
+            log(f"[TacFunctions] Finished function body of {name}, block_result={block_result}", channel="tac")
+
         finally:
+            # Salir del scope reactivado
+            if pushed:
+                if hasattr(sm, "popScope"):
+                    sm.popScope()
+                    log(f"[TacFunctions] Exited scope (popScope) {func_scope_id}", channel="tac")
+                elif hasattr(sm, "leaveScope"):
+                    sm.leaveScope()
+                    log(f"[TacFunctions] Exited scope (leaveScope) {func_scope_id}", channel="tac")
+
+            # fn_stack pop y restaurar banderas
             if hasattr(self.v, "fn_stack"):
                 try:
-                    self.v.fn_stack.pop()
+                    popped = self.v.fn_stack.pop()
+                    log(f"[TacFunctions] fn_stack.pop() -> {popped}; depth={len(self.v.fn_stack)}", channel="tac")
                 except Exception:
-                    pass
+                    log(f"[TacFunctions][WARN] fn_stack.pop() falló (pila vacía)", channel="tac")
+
             self.v.stmt_just_terminated = saved_term
             self.v.stmt_just_terminator_node = saved_node
 
@@ -85,7 +114,9 @@ class TacFunctions:
                 terminated = True
         except Exception:
             pass
-        terminated = terminated or bool(getattr(self.v.emitter, "flow_terminated", False))
+        if getattr(self.v.emitter, "flow_terminated", False):
+            terminated = True
+        log(f"[TacFunctions] terminated={terminated}, flow_terminated={getattr(self.v.emitter, 'flow_terminated', False)}", channel="tac")
 
         # --- Epílogo ---
         if not terminated:

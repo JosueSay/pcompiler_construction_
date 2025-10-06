@@ -48,6 +48,9 @@ class ScopeManager:
         self.next_scope_id: int = 0
         
         self.frame_stack: list[FrameAllocator] = []
+        self.archived_scopes: dict[int, dict[str, Symbol]] = {}
+        self.archived_offsets: dict[int, int] = {}
+
 
     # ----------------- Estado/IDs -----------------
 
@@ -69,14 +72,33 @@ class ScopeManager:
 
     def exitScope(self) -> int:
         """
-        Cierra el ámbito actual y devuelve el tamaño total (bytes) consumido
-        por los símbolos no-FUNCTION declarados en él.
+        Cierra el ámbito actual, lo archiva por su ID y devuelve el tamaño (bytes)
+        consumido por símbolos no-FUNCTION en él.
         """
+        sid = self.scope_stack[-1]
         size = self.offsets[-1]
+        # archivar una copia superficial de los símbolos y el size
+        self.archived_scopes[sid] = dict(self.scopes[-1])
+        self.archived_offsets[sid] = size
+
         self.scopes.pop()
         self.offsets.pop()
         self.scope_stack.pop()
         return size
+
+    def enterScopeById(self, scope_id: int) -> int:
+        """
+        Reactiva un scope previamente archivado (solo lectura para TAC).
+        """
+        if scope_id not in self.archived_scopes:
+            raise KeyError(f"Scope id {scope_id} no archivado")
+
+        # Pushea una copia para evitar mutaciones
+        self.scopes.append(dict(self.archived_scopes[scope_id]))
+        self.offsets.append(self.archived_offsets.get(scope_id, 0))
+        self.scope_stack.append(scope_id)
+        return scope_id
+
 
     def enterFunctionScope(self) -> int:
         """
@@ -88,14 +110,6 @@ class ScopeManager:
 
     def currentFrame(self) -> FrameAllocator | None:
         return self.frame_stack[-1] if self.frame_stack else None
-
-    def exitScope(self) -> int:
-        # igual que antes
-        size = self.offsets[-1]
-        self.scopes.pop()
-        self.offsets.pop()
-        self.scope_stack.pop()
-        return size
 
 
     # ----------------- Info del frame -----------------
@@ -255,6 +269,11 @@ class ScopeManager:
             self.frame_stack.pop()
         func_symbol.local_frame_size = locals_size
         return locals_size
+
+    # Aliases para compatibilidad con el código TAC existente
+    pushScopeById = enterScopeById
+    leaveScope = exitScope
+    popScope = exitScope
 
 class FrameAllocator:
     def __init__(self):

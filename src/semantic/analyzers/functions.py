@@ -80,6 +80,8 @@ class FunctionsAnalyzer:
                 initialized=True,
                 init_value_type=None, init_note="decl"
             )
+            log(f"[SEM][sym] {fsym.name} class={fsym.addr_class} off={fsym.offset} width={fsym.width}", channel="semantic")
+
             fsym.param_types = param_types
             fsym.return_type = rtype
             fsym.captures = CaptureInfo(captured=[])
@@ -101,6 +103,8 @@ class FunctionsAnalyzer:
         # ---- Abrir scope y registrar parámetros ----
         self.v.scopeManager.enterFunctionScope()
         curr_fn_scope_id = self.v.scopeManager.currentScopeId()
+        log(f"[SEM] enter function {name} current_scope_id={curr_fn_scope_id}", channel="semantic")
+        fsym.fn_scope_id = curr_fn_scope_id
         self.v.fn_ctx_stack.append({
             "scope_id": curr_fn_scope_id,
             "captures": set(),
@@ -113,7 +117,7 @@ class FunctionsAnalyzer:
                     pname, ptype, category=SymbolCategory.PARAMETER,
                     initialized=True, init_value_type=None, init_note="param"
                 )
-                log(f"\t[scope.param] {pname}: {ptype}, offset={psym.offset}", channel="semantic")
+                log(f"[SEM][sym] {psym.name} class={psym.addr_class} off={psym.offset} width={psym.width}", channel="semantic")
             except Exception as e:
                 self.v.appendErr(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
 
@@ -144,6 +148,7 @@ class FunctionsAnalyzer:
 
         # ---- Cerrar scope y fijar frame_size ----
         size = self.v.scopeManager.closeFunctionScope(fsym)
+        log(f"[SEM] set {name}.fn_scope_id={getattr(fsym, 'fn_scope_id', None)}; frame={fsym.local_frame_size}", channel="semantic")
         log(f"[scope] función '{name}' cerrada; frame_size={size} bytes", channel="semantic")
         log(f"[function] (SEM) fin: {name}", channel="semantic")
         log("-"*80 + "\n", channel="semantic")

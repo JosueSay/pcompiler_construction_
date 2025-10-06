@@ -260,11 +260,15 @@ class TacStatements:
 
             try:
                 sym = self.v.scopeManager.lookup(name)
+                log(f"[DEBUG] lookup({name}) -> {sym}", channel="tac")
                 dst_place = place_of_symbol(sym) if sym is not None else name
+                log(f"[DEBUG] dst_place -> {dst_place}", channel="tac")
             except Exception:
                 dst_place = name
 
+            log(f"\t[TAC][VAR] {name} -> {dst_place} = {rhs_place}", channel="tac")
             self.v.emitter.emit(Op.ASSIGN, arg1=rhs_place, res=dst_place)
+            
 
         self.v.emitter.temp_pool.resetPerStatement()
         log(f"\t[TacStatements][visitVariableDeclaration] exit: {name}", channel="tac")
@@ -349,10 +353,13 @@ class TacStatements:
 
                     try:
                         sym = self.v.scopeManager.lookup(name)
+                        log(f"[DEBUG] lookup({name}) -> {sym}", channel="tac")
                         dst_place = place_of_symbol(sym) if sym is not None else name
+                        log(f"[DEBUG] dst_place -> {dst_place}", channel="tac")
                     except Exception:
                         dst_place = name
 
+                    log(f"\t[TAC][ASSIGN] {name} -> {dst_place} = {rhs_place}", channel="tac")
                     self.v.emitter.emit(Op.ASSIGN, arg1=rhs_place, res=dst_place)
                     if it: self.v.emitter.temp_pool.free(rhs_place, "*")
                     log(f"\t[TacStatements][visitAssignment] simple assign: {name} = {rhs_place}", channel="tac")
@@ -368,10 +375,13 @@ class TacStatements:
 
             try:
                 sym = self.v.scopeManager.lookup(name)
+                log(f"[DEBUG] lookup({name}) -> {sym}", channel="tac")
                 dst_place = place_of_symbol(sym) if sym is not None else name
+                log(f"[DEBUG] dst_place -> {dst_place}", channel="tac")
             except Exception:
                 dst_place = name
 
+            log(f"\t[TAC][ASSIGN] {name} -> {dst_place} = {rhs_place}", channel="tac")
             self.v.emitter.emit(Op.ASSIGN, arg1=rhs_place, res=dst_place)
             if it: self.v.emitter.temp_pool.free(rhs_place, "*")
             log(f"\t[TacStatements][visitAssignment] variable assign: {name} = {rhs_place}", channel="tac")

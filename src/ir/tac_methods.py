@@ -53,9 +53,9 @@ class TacMethods:
     ):
         """
         Emite TAC para un método:
-        1. Prólogo (label + beginFunction).
-        2. Cuerpo (visita del bloque).
-        3. Epílogo (return implícito si es void).
+        1) Prólogo (label + beginFunction)
+        2) Cuerpo (una sola visita con contexto correcto)
+        3) Epílogo (implícito si void)
         """
         method_name = ctx_fn.Identifier().getText()
         qname = f"{current_class}.{method_name}"
@@ -70,8 +70,8 @@ class TacMethods:
 
         # --- Prólogo ---
         self.v.emitter.clearFlowTermination()
-        frame_size = getattr(fsym, "local_frame_size", 0)
-        func_label = fsym.label or f"{current_class}_{method_name}"
+        frame_size = getattr(fsym, "local_frame_size", 0) or 0
+        func_label = getattr(fsym, "label", None) or f"{current_class}_{method_name}"
 
         log("\n" + "-"*60, channel="tac")
         log(f"\t[TAC][METHOD] Begin function:", channel="tac")
@@ -81,41 +81,104 @@ class TacMethods:
         log("-"*60 + "\n", channel="tac")
 
         self.v.emitter.beginFunction(func_label, frame_size)
+        if hasattr(self.v.emitter, "temp_pool"):
+            self.v.emitter.temp_pool.resetPerStatement()
 
-        # --- Guardar estado externo ---
+        # --- Contexto del método y scope ---
+        sm = self.v.scopeManager
+        func_scope_id = getattr(fsym, "scope_id", None) or getattr(fsym, "scope", None)
+        restore_id = getattr(sm, "current_scope_id", None)
+        pushed = False
+
+        # Guardar estado externo
         saved_term = getattr(self.v, "stmt_just_terminated", None)
         saved_node = getattr(self.v, "stmt_just_terminator_node", None)
         saved_owner = getattr(self.v, "current_method_owner", None)
 
         self.v.stmt_just_terminated = None
         self.v.stmt_just_terminator_node = None
-        self.v.current_method_owner = current_class  # tipado de `this`
 
-        # --- Contexto de retorno ---
+        # Pila de retorno + owner ANTES de visitar el cuerpo
         if hasattr(self.v, "fn_stack"):
             self.v.fn_stack.append(expected_r)
+            log(f"[TacMethods] fn_stack.push({expected_r}); depth={len(self.v.fn_stack)}", channel="tac")
+
         if hasattr(self.v, "in_method"):
             self.v.in_method = True
 
-        # --- Cuerpo ---
+        self.v.current_method_owner = current_class
+        log(f"[TacMethods] current_method_owner = {current_class}", channel="tac")
+        log(f"[TacMethods] Using func_scope_id={func_scope_id} (restore_id={restore_id})", channel="tac")
+
+        # --- Cuerpo: UNA sola visita dentro del scope correcto ---
         try:
+            if func_scope_id is not None:
+                if hasattr(sm, "pushScopeById"):
+                    sm.pushScopeById(func_scope_id); pushed = True
+                    log(f"[TacMethods] Entered scope (pushScopeById) {func_scope_id}", channel="tac")
+                elif hasattr(sm, "enterScopeById"):
+                    sm.enterScopeById(func_scope_id); pushed = True
+                    log(f"[TacMethods] Entered scope (enterScopeById) {func_scope_id}", channel="tac")
+                elif hasattr(sm, "enterScope"):
+                    sm.enterScope(func_scope_id); pushed = True
+                    log(f"[TacMethods] Entered scope (enterScope) {func_scope_id}", channel="tac")
+            else:
+                log(f"[TacMethods][WARN] Método '{qname}' sin func_scope_id; usando scope actual", channel="tac")
+
+            log(f"[TacMethods] Visiting method body of {qname}", channel="tac")
             block_result = self.v.visit(ctx_fn.block())
+            log(f"[TacMethods] Finished method body of {qname}, block_result={block_result}", channel="tac")
+
         finally:
-            # Restaurar contexto externo
+            # Salir del scope del método
+            if pushed and hasattr(sm, "popScope"):
+                sm.popScope()
+                log(f"[TacMethods] Exited scope (popScope) {func_scope_id}", channel="tac")
+            elif pushed and hasattr(sm, "leaveScope"):
+                sm.leaveScope()
+                log(f"[TacMethods] Exited scope (leaveScope) {func_scope_id}", channel="tac")
+            elif not pushed and restore_id is not None and hasattr(sm, "setCurrentScopeId"):
+                sm.setCurrentScopeId(restore_id)
+                log(f"[TacMethods] Restored previous scope {restore_id}", channel="tac")
+
+            # Pop de contexto del método
             if hasattr(self.v, "fn_stack"):
-                self.v.fn_stack.pop()
+                try:
+                    popped = self.v.fn_stack.pop()
+                    log(f"[TacMethods] fn_stack.pop() -> {popped}; depth={len(self.v.fn_stack)}", channel="tac")
+                except Exception:
+                    log(f"[TacMethods][WARN] fn_stack.pop() falló (pila vacía)", channel="tac")
+
             if hasattr(self.v, "in_method"):
                 self.v.in_method = False
 
+            self.v.current_method_owner = saved_owner
             self.v.stmt_just_terminated = saved_term
             self.v.stmt_just_terminator_node = saved_node
-            self.v.current_method_owner = saved_owner
 
-        # --- Epílogo (return implícito) ---
-        if isinstance(expected_r, VoidType) and not self.v.emitter.flow_terminated:
-            self.v.emitter.endFunctionWithReturn(None)
-            log(f"\t[TAC][METHOD] Implicit return in void method {qname}", channel="tac")
+        # --- Detección de flujo terminado ---
+        terminated = False
+        try:
+            if isinstance(block_result, dict) and block_result.get("terminated"):
+                terminated = True
+        except Exception:
+            pass
+        if getattr(self.v.emitter, "flow_terminated", False):
+            terminated = True
+        log(f"[TacMethods] terminated={terminated}, flow_terminated={getattr(self.v.emitter, 'flow_terminated', False)}", channel="tac")
+
+        # --- Epílogo ---
+        if not terminated:
+            if isinstance(expected_r, VoidType):
+                self.v.emitter.endFunction()
+                log(f"\t[TAC][METHOD] Implicit endFunction (sin return) en método void {qname}", channel="tac")
+            else:
+                self.v.emitter.endFunctionWithReturn("None")
+                log(f"\t[TAC][WARN] Método '{qname}' no-void sin 'return'; emitiendo return None.", channel="tac")
 
         self.v.emitter.clearFlowTermination()
+        if hasattr(self.v.emitter, "temp_pool"):
+            self.v.emitter.temp_pool.resetPerStatement()
+
         log(f"\t[TAC][METHOD] End function: {qname}\n", channel="tac")
         return block_result

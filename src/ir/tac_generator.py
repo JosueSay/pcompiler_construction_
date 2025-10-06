@@ -50,29 +50,34 @@ class TacGenerator(CompiscriptVisitor):
     # ---------- Raíz ----------
     @logFunction(channel="tac")
     def visitProgram(self, ctx: CompiscriptParser.ProgramContext):
-        log("[TacGenerator] visitProgram", channel="tac")
+        log("[TacGenerator] visitProgram - empezando a generar TAC a nivel toplevel", channel="tac")
 
-        # Emitimos TAC solo de funciones y clases a nivel toplevel.
         for st in ctx.statement():
             cd = st.classDeclaration() if hasattr(st, "classDeclaration") else None
             fd = st.functionDeclaration() if hasattr(st, "functionDeclaration") else None
 
             if cd:
+                log(f"[TacGenerator] visitProgram - clase detectada: {cd.Identifier().getText()}", channel="tac")
                 self.visitClassDeclaration(cd)
             elif fd:
+                log(f"[TacGenerator] visitProgram - función detectada: {fd.Identifier().getText()}", channel="tac")
                 self.visitFunctionDeclaration(fd)
             else:
+                log("[TacGenerator] visitProgram - statement toplevel no clase/función", channel="tac")
                 self.visit(st)
 
+        log("[TacGenerator] visitProgram - fin de generación TAC toplevel", channel="tac")
         return None
 
     # ---------- Clases / Funciones ----------
     @logFunction(channel="tac")
     def visitClassDeclaration(self, ctx: CompiscriptParser.ClassDeclarationContext):
+        log(f"[TacGenerator] visitClassDeclaration - clase: {ctx.Identifier().getText()}", channel="tac")
         return self.tmethods.visitClassDeclaration(ctx)
 
     @logFunction(channel="tac")
     def visitFunctionDeclaration(self, ctx: CompiscriptParser.FunctionDeclarationContext):
+        log(f"[TacGenerator] visitFunctionDeclaration - función: {ctx.Identifier().getText()}", channel="tac")
         return self.tfuncs.visitFunctionDeclaration(ctx)
 
     # ---------- Control de flujo ----------
@@ -87,16 +92,19 @@ class TacGenerator(CompiscriptVisitor):
     # ---------- Returns ----------
     @logFunction(channel="tac")
     def visitReturnStatement(self, ctx):
+        log(f"[TacGenerator] visitReturnStatement - procesando return", channel="tac")
         if self.treturns is not None:
             return self.treturns.visitReturnStatement(ctx)
 
-        # Fallback mínimo si no hay módulo de returns:
         expr = getattr(ctx, "expression", lambda: None)()
         if expr is None:
+            log("[TacGenerator] visitReturnStatement - return sin expresión", channel="tac")
             self.emitter.endFunctionWithReturn(None)
             return {"terminated": True, "reason": "return"}
-        self.visit(expr)  # asegura que exista _place
+
+        self.visit(expr)
         place = getattr(expr, "_place", None) or expr.getText()
+        log(f"[TacGenerator] visitReturnStatement - return con expresión, place={place}", channel="tac")
         self.emitter.endFunctionWithReturn(place)
         return {"terminated": True, "reason": "return"}
 
