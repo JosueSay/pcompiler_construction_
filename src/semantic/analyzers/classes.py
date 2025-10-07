@@ -91,7 +91,12 @@ class ClassesAnalyzer:
             return None
 
         # Scope del método
-        self.v.scopeManager.enterFunctionScope()
+        fn_scope_id = self.v.scopeManager.enterFunctionScope()  # devuelve el ID real del scope
+        setattr(fsym, "func_scope_id", fn_scope_id)            # nuevo atributo para scope de ejecución
+        log(f"[SEM] set {qname}.func_scope_id={fn_scope_id}", channel="semantic")
+     
+        
+        
         self.v.in_method = True
         for pname, ptype in zip(param_names, param_types):
             try:
@@ -104,11 +109,21 @@ class ClassesAnalyzer:
                 self.v.appendErr(SemanticError(str(e), line=ctx_fn.start.line, column=ctx_fn.start.column))
 
         self.v.fn_stack.append(rtype if rtype else VoidType())
-        block_result = self.v.visit(ctx_fn.block())
-        self.v.fn_stack.pop()
+        # --- marcar el cuerpo del método para que NO abra un scope extra ---
+        _prev_body = getattr(self.v, "_fn_body_block_ctx", None)
+        self.v._fn_body_block_ctx = ctx_fn.block()
+        try:
+            block_result = self.v.visit(ctx_fn.block())
+        finally:
+            # restaurar siempre
+            self.v._fn_body_block_ctx = _prev_body
+            self.v.fn_stack.pop()
 
         size = self.v.scopeManager.closeFunctionScope(fsym)
         log(f"[scope] método '{qname}' cerrado; frame_size={size} bytes", channel="semantic")
+        if fn_scope_id is not None:
+            log(f"[SEM] set {qname}.fn_scope_id={fn_scope_id}; frame={size}", channel="semantic")
+            
         self.v.in_method = False
         log("-"*80 + "\n", channel="semantic")
 

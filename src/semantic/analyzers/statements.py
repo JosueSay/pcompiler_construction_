@@ -589,11 +589,12 @@ class StatementsAnalyzer:
             self.v.appendErr(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
             return
 
-        if self.v.class_stack:
+        if self.v.class_stack and not getattr(self.v, "in_method", False):
             current_class = self.v.class_stack[-1]
             if self.v.class_handler.getAttributeType(current_class, name) is None:
                 self.v.class_handler.addAttribute(current_class, name, declared_type)
                 log(f"visitVariableDeclaration: atributo '{name}' registrado en clase '{current_class}'", channel="semantic")
+
 
 
     def visitConstantDeclaration(self, ctx):
@@ -657,11 +658,12 @@ class StatementsAnalyzer:
             self.v.appendErr(SemanticError(str(e), line=ctx.start.line, column=ctx.start.column))
             return
 
-        if self.v.class_stack:
+        if self.v.class_stack and not getattr(self.v, "in_method", False):
             current_class = self.v.class_stack[-1]
             if self.v.class_handler.getAttributeType(current_class, name) is None:
                 self.v.class_handler.addAttribute(current_class, name, declared_type)
                 log(f"visitConstantDeclaration: atributo '{name}' registrado en clase '{current_class}'", channel="semantic")
+
 
 
     # ------------------------------------------------------------------

@@ -168,12 +168,10 @@ class TacControlFlow:
             log("\t[TAC][if] No then statement found, skipping", channel="tac")
             return {"terminated": False, "reason": None}
 
-        # --- IDs y labels (formato del video) ---
-        self.if_seq += 1
-        iid = self.if_seq
-        l_then = f"LABEL_TRUE_{iid}"
-        l_end  = f"ENDIF_{iid}"
-        l_else = f"LABEL_FALSE_{iid}" if else_stmt is not None else l_end
+        # --- IDs y labels ---
+        l_then = self.v.emitter.newLabel("IF_THEN")
+        l_end  = self.v.emitter.newLabel("IF_END")
+        l_else = self.v.emitter.newLabel("IF_ELSE") if else_stmt is not None else l_end
 
         log(f"\n[TAC][if] Labels -> then={l_then}, else={l_else}, end={l_end}", channel="tac")
 
@@ -223,11 +221,9 @@ class TacControlFlow:
         cond_ctx = safeAttr(ctx, "expression") or safeAttr(ctx, "cond") or safeAttr(ctx, "condition")
         body = safeAttr(ctx, "statement") or safeAttr(ctx, "body") or safeAttr(ctx, "block")
 
-        self.while_seq += 1
-        wid = self.while_seq
-        l_start = f"STARTWHILE_{wid}"
-        l_body  = f"LABEL_TRUE_{wid}"
-        l_end   = f"ENDWHILE_{wid}"
+        l_start = self.v.emitter.newLabel("WHILE_START")
+        l_body  = self.v.emitter.newLabel("WHILE_BODY")
+        l_end   = self.v.emitter.newLabel("WHILE_END")
 
         log(f"\n[TAC][while] Labels -> start={l_start}, body={l_body}, end={l_end}", channel="tac")
 
