@@ -19,7 +19,6 @@ def place_of_symbol(sym, *, fp_syntax: bool = True) -> str:
         return f"param[{sym.offset}]"
 
     if cls == "local":
-        # Mostrar locales con desplazamiento positivo como en el video
         # (solo afecta a la representación textual, no a la semántica)
         disp = sym.offset + sym.width
         if fp_syntax:

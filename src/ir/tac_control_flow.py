@@ -407,6 +407,11 @@ class TacControlFlow:
         if discr is None:
             return {"terminated": False, "reason": None}
 
+        self.v.visit(discr)
+        sw_place, _ = deepPlace(discr)
+        if not sw_place:   # fallback por si fuera literal raro (no debería)
+            sw_place = discr.getText()
+
         discr_text = discr.getText()
         log(f"\n[TAC][switch] Discriminant -> {discr_text}", channel="tac")
 
@@ -476,9 +481,15 @@ class TacControlFlow:
         log(f"\t[TAC][switch] Labels -> end={l_end}, default={l_def}, cases={[lbl for lbl in l_cases]}", channel="tac")
 
         for (case_expr, _), l_case in zip(cases, l_cases):
-            cond_text = f"{discr_text} == {case_expr.getText()}"
-            log(f"\t[TAC][switch] if {cond_text} goto {l_case}", channel="tac")
-            self.v.emitter.emitIfGoto(cond_text, l_case)
+            self.v.visit(case_expr)
+            cv_place, _ = deepPlace(case_expr)
+            if not cv_place:
+                cv_place = case_expr.getText()
+
+            # IF sw_place == cv_place GOTO l_case
+            self.v.emitter.emitIfGoto(f"{sw_place} == {cv_place}", l_case)
+
+
         self.v.emitter.emitGoto(l_def)
 
         self.switch_ctx_stack.append({"break": l_end, "continue": l_end})
