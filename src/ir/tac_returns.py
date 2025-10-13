@@ -1,7 +1,7 @@
 from semantic.custom_types import VoidType
 from logs.logger import log
 from utils.ast_utils import deepPlace, freeIfTemp
-
+from ir.tac import Op
 
 class TacReturns:
     """
@@ -48,15 +48,15 @@ class TacReturns:
         def _end(value=None):
             """
             Emite RETURN en TAC y marca flujo como terminado.
-            value:
-                None   -> RETURN        (sin valor explícito)
-                "None" -> RETURN None   (literal None conservador)
-                expr   -> RETURN expr   (valor de la expresión)
+            NO cierra la función aquí: el epílogo único lo hace TacFunctions.
             """
             pretty_val = value if value is not None else "(no value)"
             log(f"\t[TAC] RETURN {pretty_val}", channel="tac")
 
-            self.v.emitter.endFunctionWithReturn(value)
+            if value is None:
+                self.v.emitter.emit(Op.RETURN)
+            else:
+                self.v.emitter.emit(Op.RETURN, arg1=value)
 
             if hasattr(self.v.emitter, "markFlowTerminated"):
                 self.v.emitter.markFlowTerminated()
@@ -80,7 +80,7 @@ class TacReturns:
 
         log(f"\t[expr] Evaluated return expression → {ret_place}", channel="tac")
 
-        self.v.emitter.endFunctionWithReturn(ret_place)
+        self.v.emitter.emit(Op.RETURN, arg1=ret_place)
 
         # Liberar temporales asociados a la expresión, si corresponde
         try:

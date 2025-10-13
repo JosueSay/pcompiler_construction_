@@ -175,6 +175,9 @@ class TacMethods:
             else:
                 self.v.emitter.endFunctionWithReturn("None")
                 log(f"\t[TAC][WARN] Método '{qname}' no-void sin 'return'; emitiendo return None.", channel="tac")
+                
+        else:
+            self.v.emitter.endFunction()
 
         self.v.emitter.clearFlowTermination()
         if hasattr(self.v.emitter, "temp_pool"):

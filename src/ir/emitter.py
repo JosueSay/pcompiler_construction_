@@ -62,7 +62,7 @@ class Emitter:
         Inserta un quad si no hay barrera activa. Si la hay, solo acepta `LABEL`.
         Devuelve el quad emitido o None si se suprimió.
         """
-        if self.flow_terminated and op not in (Op.LABEL,):
+        if self.flow_terminated and op not in (Op.LABEL, Op.LEAVE):
             return None
         q = Quad(op=op, arg1=arg1, arg2=arg2, res=res, label=label)
         self.quads.append(q)
@@ -171,8 +171,11 @@ class Emitter:
             self.emit(Op.RETURN, arg1=value_place)
         else:
             self.emit(Op.RETURN)
-            
+
+        # Cierre de la función (necesario para que salga "END FUNCTION ...")
         self.emit(Op.LEAVE, arg1=self.current_function)
+
+        # Activa la barrera para suprimir emisión posterior (menos LABEL/LEAVE)
         self.markFlowTerminated()
 
     def endFunction(self) -> None:

@@ -2,7 +2,7 @@ from antlr_gen.CompiscriptParser import CompiscriptParser
 from logs.logger import log, logFunction
 from semantic.custom_types import VoidType
 from utils.ast_utils import findFunctionSymbol
-
+from ir.tac import Op
 
 class TacFunctions:
     """
@@ -120,12 +120,18 @@ class TacFunctions:
 
         # --- Epílogo ---
         if not terminated:
+            # No hubo 'return' en el cuerpo
             if isinstance(expected_ret, VoidType):
+                
                 self.v.emitter.endFunction()
                 log(f"\t[TAC][FUNC] Implicit endFunction (sin return) en función void '{name}'", channel="tac")
             else:
-                self.v.emitter.endFunctionWithReturn("None")
-                log(f"\t[TAC][WARN] Función '{name}' no-void sin 'return'; emitiendo return None.", channel="tac")
+                
+                self.v.emitter.emit(Op.RETURN, arg1="None")
+                self.v.emitter.endFunction()
+                log(f"\t[TAC][WARN] Función '{name}' no-void sin 'return'; emitiendo RETURN None.", channel="tac")
+        else:
+            self.v.emitter.endFunction()
 
         # --- Limpieza ---
         self.v.emitter.clearFlowTermination()

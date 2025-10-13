@@ -186,27 +186,42 @@ class TacControlFlow:
 
         # --- Else block ---
         if else_stmt is not None:
-            self.v.emitter.emitGoto(l_end)
+            
+            if not bool(then_result.get("terminated")):
+                self.v.emitter.emitGoto(l_end)
+                log(f"\t[TAC][if] THEN falls through -> GOTO {l_end}", channel="tac")
+
             self.v.emitter.emitLabel(l_else)
             log(f"\t[TAC][if] Entering ELSE block -> {l_else}", channel="tac")
+
             if bool(then_result.get("terminated")):
-                # si el THEN terminó (return/break/continue), limpiamos barrera para poder emitir el else
+                
                 self.v.emitter.clearFlowTermination()
+
             else_result = self.v.visit(else_stmt) or {"terminated": False, "reason": None}
         else:
             else_result = {"terminated": False, "reason": None}
 
-        # --- End label ---
-        self.v.emitter.emitLabel(l_end)
-        log(f"\t[TAC][if] End IF/ELSE -> {l_end}", channel="tac")
-
         # --- Estado de terminación compuesto ---
-        both_terminate = bool(then_result.get("terminated") and else_result.get("terminated"))
+        then_term  = bool(then_result.get("terminated"))
+        else_term  = bool(else_result.get("terminated")) if else_stmt is not None else False
+        both_terminate = then_term and (else_stmt is not None) and else_term
+
+        # --- End label (solo si hace falta) ---
+        # - Con ELSE: emitimos END solo si NO terminan ambas ramas (hay camino que cae).
+        # - Sin ELSE: nunca lo necesitamos (tampoco emitimos GOTO hacia END).
+        if else_stmt is not None and not both_terminate:
+            self.v.emitter.emitLabel(l_end)
+            log(f"\t[TAC][if] End IF/ELSE -> {l_end}", channel="tac")
+        else:
+            log(f"\t[TAC][if] End label suppressed (no incoming jumps)", channel="tac")
+
         if both_terminate:
             log(f"\t[TAC][if] Both THEN and ELSE blocks terminate", channel="tac")
             self.v.stmt_just_terminated = "if-else"
             self.v.stmt_just_terminator_node = ctx
             return {"terminated": True, "reason": "if-else"}
+
 
         self.v.emitter.clearFlowTermination()
         self.v.stmt_just_terminated = None
