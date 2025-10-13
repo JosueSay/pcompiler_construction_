@@ -361,8 +361,9 @@ class TacExpressions:
                     self.v.emitter.temp_pool.free(aplace, "*")
                 n_params += 1
             f_label = f"{ctor_owner}_constructor"
-            self.v.emitter.emit(Op.CALL, arg1=f_label, arg2=str(n_params))
+            self.v.emitter.emitCall(f_label, n_params)
             log(f"\t[TAC][expr] CALL constructor {f_label} with {n_params} params", channel="tac")
+
 
         setPlace(ctx, t_obj, True)
         log(f"\t[TAC][expr] newExpr place: {t_obj}", channel="tac")

@@ -76,6 +76,15 @@ class Emitter:
 
 
     # ---------- atajos frecuentes ----------
+    def emitCall(self, fname: str, nargs: int, dst: str | None = None) -> None:
+        self.emit(Op.CALL, arg1=fname, arg2=str(nargs))
+        if dst is not None:
+            self.emitAssign(dst, "R")
+
+    def emitCallC(self, fname: str, nargs: int, dst: str | None = None) -> None:
+        self.emit(Op.CALLC, arg1=fname, arg2=str(nargs))
+        if dst is not None:
+            self.emitAssign(dst, "R")
 
     def emitGoto(self, target: str) -> None:
         self.emit(Op.GOTO, arg1=target)

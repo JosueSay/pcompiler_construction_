@@ -34,14 +34,11 @@ class TempPool:
         """
         k = kind or "*"
         if self._free[k]:
-            name = self._free[k].pop()        
-            log(f"\t\t[TempPool][pool] reuse {name} ({k})", channel="tac")
-                
+            name = self._free[k].pop()
         else:
-            self.next_id += 1
             name = f"t{self.next_id}"
+            self.next_id += 1
             self.kind_of[name] = k
-            log(f"\t\t[TempPool][pool] alloc {name} ({k})", channel="tac")
         self.leased_stmt.add(name)
         return name
 
