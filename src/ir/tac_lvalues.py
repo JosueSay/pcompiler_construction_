@@ -185,15 +185,13 @@ class TacLValues:
                 if can_be_closure:
                     clos_place = base_place
                     if isinstance(ret_t, VoidType):
-                        # ANTES: self.v.emitter.emit(Op.CALLC, arg1=clos_place, arg2=str(n_params))
-                        self.v.emitter.emitCallC(clos_place, n_params)                 # NUEVO
+                        self.v.emitter.emitCallC(clos_place, n_params)
                         base_place = ""
                         base_is_temp = False
                         setPlace(suf, "", False)
                     else:
                         t_ret = self.v.emitter.temp_pool.newTemp(typeToTempKind(ret_t))
-                        # ANTES: self.v.emitter.emit(Op.CALLC, arg1=clos_place, arg2=str(n_params), res=t_ret)
-                        self.v.emitter.emitCallC(clos_place, n_params, dst=t_ret)      # NUEVO
+                        self.v.emitter.emitCallC(clos_place, n_params, dst=t_ret)
                         base_place = t_ret
                         base_is_temp = True
                         setPlace(suf, t_ret, True)
@@ -220,15 +218,13 @@ class TacLValues:
                             f_label = f"{base_name}"
 
                 if isinstance(ret_t, VoidType):
-                    # ANTES: self.v.emitter.emit(Op.CALL, arg1=f_label, arg2=str(n_params))
-                    self.v.emitter.emitCall(f_label, n_params)                          # NUEVO
+                    self.v.emitter.emitCall(f_label, n_params)
                     base_place = ""
                     base_is_temp = False
                     setPlace(suf, "", False)
                 else:
                     t_ret = self.v.emitter.temp_pool.newTemp(typeToTempKind(ret_t))
-                    # ANTES: self.v.emitter.emit(Op.CALL, arg1=f_label, arg2=str(n_params), res=t_ret)
-                    self.v.emitter.emitCall(f_label, n_params, dst=t_ret)               # NUEVO
+                    self.v.emitter.emitCall(f_label, n_params, dst=t_ret)
                     base_place = t_ret
                     base_is_temp = True
                     setPlace(suf, t_ret, True)

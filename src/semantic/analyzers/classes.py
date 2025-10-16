@@ -92,7 +92,7 @@ class ClassesAnalyzer:
 
         # Scope del método
         fn_scope_id = self.v.scopeManager.enterFunctionScope()  # devuelve el ID real del scope
-        setattr(fsym, "func_scope_id", fn_scope_id)            # nuevo atributo para scope de ejecución
+        setattr(fsym, "func_scope_id", fn_scope_id)
         log(f"[SEM] set {qname}.func_scope_id={fn_scope_id}", channel="semantic")
      
         
