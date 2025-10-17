@@ -131,11 +131,13 @@ class TacExpressions:
 
         for k, ek in enumerate(expr_ctxs):
             self.v.visit(ek)
-            elem_place = getattr(ek, "_place", None) or ek.getText()
+            p, it = deepPlace(ek)
+            elem_place = p or ek.getText()
             self.v.emitter.emit(Op.INDEX_STORE, arg1=t_list, res=elem_place, label=k)
             log(f"\t[TAC][expr] array element {k}: {elem_place}", channel="tac")
-            if getattr(ek, "_is_temp", False):
+            if it:
                 self.v.emitter.temp_pool.free(elem_place, "*")
+
 
         setPlace(ctx, t_list, True)
         log(f"\t[TAC][expr] array literal place: {t_list}", channel="tac")
@@ -171,12 +173,18 @@ class TacExpressions:
             self.v.visit(right_node)
             right_place = getPlace(right_node) or deepPlace(right_node)[0] or right_node.getText()
 
+            # 1) liberar primero el operando derecho si es temp → habilita reciclaje inmediato
+            if isTempNode(right_node):
+                self.v.emitter.temp_pool.free(right_place, "*")
+
+            # 2) ahora pedir el nuevo temporal (podría reutilizar el del right)
             t = self.v.emitter.temp_pool.newTemp("*")
             self.v.emitter.emit(Op.BINARY, arg1=current_place, arg2=right_place, res=t, label=op_txt)
             log(f"\t[TAC][expr] binary {op_txt}: {current_place}, {right_place} -> {t}", channel="tac")
 
+            # 3) liberar el operando izquierdo si era temp (ya no se usa)
             freeIfTemp(current_node, self.v.emitter.temp_pool, "*")
-            freeIfTemp(right_node, self.v.emitter.temp_pool, "*")
+
             current_place = t
             current_node = ctx
             made_temp = True
@@ -211,12 +219,18 @@ class TacExpressions:
             self.v.visit(right_node)
             right_place = getPlace(right_node) or deepPlace(right_node)[0] or right_node.getText()
 
+            # 1) liberar primero el operando derecho si es temp → habilita reciclaje
+            if isTempNode(right_node):
+                self.v.emitter.temp_pool.free(right_place, "*")
+
+            # 2) pedir el temporal booleano (puede reutilizar el recién liberado)
             t = self.v.emitter.temp_pool.newTemp("bool")
             self.v.emitter.emit(Op.BINARY, arg1=last_place, arg2=right_place, res=t, label=op_txt)
             log(f"\t[TAC][expr] relational {op_txt}: {last_place}, {right_place} -> {t}", channel="tac")
 
+            # 3) liberar el operando izquierdo si era temp
             freeIfTemp(last_node, self.v.emitter.temp_pool, "*")
-            freeIfTemp(right_node, self.v.emitter.temp_pool, "*")
+
             final_place = t
             last_place = right_place
             last_node = ctx
@@ -250,12 +264,18 @@ class TacExpressions:
             self.v.visit(right_node)
             right_place = getPlace(right_node) or deepPlace(right_node)[0] or right_node.getText()
 
+            # 1) liberar primero el operando derecho si es temp
+            if isTempNode(right_node):
+                self.v.emitter.temp_pool.free(right_place, "*")
+
+            # 2) pedir el temporal booleano (posible reutilización)
             t = self.v.emitter.temp_pool.newTemp("bool")
             self.v.emitter.emit(Op.BINARY, arg1=current_place, arg2=right_place, res=t, label="&&")
             log(f"\t[TAC][expr] logical AND: {current_place}, {right_place} -> {t}", channel="tac")
 
+            # 3) liberar el operando izquierdo si era temp
             freeIfTemp(current_node, self.v.emitter.temp_pool, "*")
-            freeIfTemp(right_node, self.v.emitter.temp_pool, "*")
+
             current_place = t
             current_node = ctx
             made_temp = True
@@ -283,12 +303,18 @@ class TacExpressions:
             self.v.visit(right_node)
             right_place = getPlace(right_node) or deepPlace(right_node)[0] or right_node.getText()
 
+            # 1) liberar primero el operando derecho si es temp
+            if isTempNode(right_node):
+                self.v.emitter.temp_pool.free(right_place, "*")
+
+            # 2) pedir el temporal booleano (posible reutilización)
             t = self.v.emitter.temp_pool.newTemp("bool")
             self.v.emitter.emit(Op.BINARY, arg1=current_place, arg2=right_place, res=t, label="||")
             log(f"\t[TAC][expr] logical OR: {current_place}, {right_place} -> {t}", channel="tac")
 
+            # 3) liberar el operando izquierdo si era temp
             freeIfTemp(current_node, self.v.emitter.temp_pool, "*")
-            freeIfTemp(right_node, self.v.emitter.temp_pool, "*")
+
             current_place = t
             current_node = ctx
             made_temp = True

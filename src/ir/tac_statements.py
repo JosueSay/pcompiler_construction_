@@ -200,7 +200,6 @@ class TacStatements:
             self.v.emitter.temp_pool.resetPerStatement()
             return None
 
-        # No asignación: evaluar por efectos
         log("\t[TacStatements][visitExpressionStatement] evaluate expression for effects", channel="tac")
         self.v.visit(expr)
         self.v.emitter.temp_pool.resetPerStatement()
@@ -254,7 +253,7 @@ class TacStatements:
         init = ctx.initializer()
         if init is not None:
             self.v.visit(init.expression())
-            p, _ = deepPlace(init.expression())
+            p, it = deepPlace(init.expression())
             rhs_place = p or init.expression().getText()
             log(f"\t[TacStatements][visitVariableDeclaration] initializer for {name}: {rhs_place}", channel="tac")
 
@@ -268,7 +267,10 @@ class TacStatements:
 
             log(f"\t[TAC][VAR] {name} -> {dst_place} = {rhs_place}", channel="tac")
             self.v.emitter.emit(Op.ASSIGN, arg1=rhs_place, res=dst_place)
-            
+
+            # liberar RHS si fue temporal
+            if it:
+                self.v.emitter.temp_pool.free(rhs_place, "*")
 
         self.v.emitter.temp_pool.resetPerStatement()
         log(f"\t[TacStatements][visitVariableDeclaration] exit: {name}", channel="tac")
@@ -286,10 +288,14 @@ class TacStatements:
         expr_ctx = ctx.expression()
         if expr_ctx is not None:
             self.v.visit(expr_ctx)
-            p, _ = deepPlace(expr_ctx)
+            p, it = deepPlace(expr_ctx)
             rhs_place = p or expr_ctx.getText()
             log(f"\t[TacStatements][visitConstantDeclaration] initializer: {rhs_place}", channel="tac")
             self.v.emitter.emit(Op.ASSIGN, arg1=rhs_place, res=name)
+
+            # liberar RHS si fue temporal
+            if it:
+                self.v.emitter.temp_pool.free(rhs_place, "*")
 
         self.v.emitter.temp_pool.resetPerStatement()
         log(f"\t[TacStatements][visitConstantDeclaration] exit: {name}", channel="tac")
@@ -362,11 +368,11 @@ class TacStatements:
                     log(f"\t[TAC][ASSIGN] {name} -> {dst_place} = {rhs_place}", channel="tac")
                     self.v.emitter.emit(Op.ASSIGN, arg1=rhs_place, res=dst_place)
                     if it: self.v.emitter.temp_pool.free(rhs_place, "*")
+                    self.v.emitter.temp_pool.resetPerStatement()
                     log(f"\t[TacStatements][visitAssignment] simple assign: {name} = {rhs_place}", channel="tac")
                     return None
 
-        # Asignación a índice o propiedad (AssignmentContext formal)
-        # (var) name = expr
+        # Asignación a índice
         if n == 1 and ctx.Identifier() is not None:
             name = ctx.Identifier().getText()
             self.v.visit(exprs[0])
@@ -384,6 +390,7 @@ class TacStatements:
             log(f"\t[TAC][ASSIGN] {name} -> {dst_place} = {rhs_place}", channel="tac")
             self.v.emitter.emit(Op.ASSIGN, arg1=rhs_place, res=dst_place)
             if it: self.v.emitter.temp_pool.free(rhs_place, "*")
+            self.v.emitter.temp_pool.resetPerStatement()
             log(f"\t[TacStatements][visitAssignment] variable assign: {name} = {rhs_place}", channel="tac")
             return None
 
@@ -409,6 +416,7 @@ class TacStatements:
                 if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
                 if it_rhs: self.v.emitter.temp_pool.free(rhs_place, "*")
                 if t_len: self.v.emitter.temp_pool.free(t_len, "*")
+                self.v.emitter.temp_pool.resetPerStatement()
                 log(f"\t[TacStatements][visitAssignment] index assign complete: {base_name}[{idx_place}] = {rhs_place}", channel="tac")
                 return None
 
@@ -433,10 +441,13 @@ class TacStatements:
             if it_obj: self.v.emitter.temp_pool.free(obj_place, "*")
             if it_rhs: self.v.emitter.temp_pool.free(rhs_place, "*")
 
+            self.v.emitter.temp_pool.resetPerStatement()
             log(f"\t[TacStatements][visitAssignment] property assign: {obj_place}.{prop_name} = {rhs_place}", channel="tac")
             return None
 
         log("\t[TacStatements][visitAssignment] exit", channel="tac")
+        # Asegurar reset incluso si ninguna rama hizo return temprano
+        self.v.emitter.temp_pool.resetPerStatement()
         return None
 
     # ----------------------------------

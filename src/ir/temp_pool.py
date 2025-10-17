@@ -23,18 +23,19 @@ class TempPool:
 
     def __init__(self) -> None:
         self.next_id = 0
-        self._free = defaultdict(list)     # kind -> [tN, ...]
-        self.kind_of: dict[str, str] = {} # tN -> kind
+        self.free_by_kind = defaultdict(list)  # kind -> [tN, ...]
+        self.kind_of: dict[str, str] = {}      # tN -> kind
         self.leased_stmt: set[str] = set()
 
     def newTemp(self, kind: str = "*") -> str:
         """
-        Devuelve un nuevo nombre temporal (tN). `kind` se ignora para el
-        nombre pero se mantiene por compatibilidad con los llamadores.
+        Devuelve un temporal del tipo `kind`, reutilizando si es posible.
         """
         k = kind or "*"
-        if self._free[k]:
-            name = self._free[k].pop()
+        if self.free_by_kind[k]:
+            name = self.free_by_kind[k].pop()
+            # Asegura que el mapeo exista (defensivo ante resetes parciales)
+            self.kind_of.setdefault(name, k)
         else:
             name = f"t{self.next_id}"
             self.next_id += 1
@@ -42,29 +43,33 @@ class TempPool:
         self.leased_stmt.add(name)
         return name
 
+
     def free(self, name: str, kind: str = "*") -> None:
         """
-        Gancho para liberar un temporal. No hace nada a propósito.
-        Se conserva para no romper a los llamadores.
+        Libera un temporal solo si tiene forma 't<numero>'.
+        Evita meter en la free list lugares como gp[8], fp[0], literales, etc.
         """
-        if not name:
+        if not name or not isinstance(name, str) or not name.startswith("t") or not name[1:].isdigit():
             return
         k = self.kind_of.get(name, kind or "*")
-        self._free[k].append(name)
+        self.free_by_kind[k].append(name)
         self.leased_stmt.discard(name)
         log(f"\t\t[TempPool][pool] free  {name} ({k})", channel="tac")
 
+
     def resetPerStatement(self) -> None:
-        """Marca el fin de una sentencia: limpiamos el set por-sentencia."""
+        """Marca el fin de una sentencia: devolver temporales a la free list."""
         for name in list(self.leased_stmt):
-            k = self.kind_of.get(name, "*")
-            self._free[k].append(name)
-            log(f"\t\t[TempPool][pool] free  {name} ({k}) [resetPerStatement]", channel="tac")
+            # Solo reciclar verdaderos temporales t\d+
+            if isinstance(name, str) and name.startswith("t") and name[1:].isdigit():
+                k = self.kind_of.get(name, "*")
+                self.free_by_kind[k].append(name)
+                log(f"\t\t[TempPool][pool] free  {name} ({k}) [resetPerStatement]", channel="tac")
         self.leased_stmt.clear()
 
     def resetPerFunction(self) -> None:
-        """Marca el inicio de una nueva función: reinicia numeración y sets."""
+        """Marca el inicio de una nueva función: reinicia numeración y estructuras."""
         self.next_id = 0
-        self._free.clear()
+        self.free_by_kind.clear()
         self.leased_stmt.clear()
         self.kind_of.clear()
