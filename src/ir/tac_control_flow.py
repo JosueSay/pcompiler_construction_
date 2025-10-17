@@ -6,7 +6,7 @@ from utils.ast_utils import (
     walk, extractNotInner,
     asList, maybeCall, safeAttr, firstExpression,
     splitAssignmentText, isAssignText, collectStmtOrBlock,
-    firstSwitchDiscriminant, hasDefaultClause, deepPlace
+    firstSwitchDiscriminant, hasDefaultClause, deepPlace, freeIfTemp  
 )
 
 
@@ -51,6 +51,13 @@ class TacControlFlow:
         except Exception:
             desc = "<temp_pool repr unavailable>"
         log(f"[temps] {note} :: {desc}", channel="tac")
+        
+    def freeCondTemps(self, node, note: str = "") -> None:
+        try:
+            freeIfTemp(node, self.v.emitter.temp_pool, "*")
+            log(f"\t[TAC][Cond] early-free temps {note}".rstrip(), channel="tac")
+        except Exception:
+            pass        
 
     def unwrapCondCore(self, n):
         # expression -> assignmentExpr -> conditionalExpr -> logicalOrExpr
@@ -105,6 +112,7 @@ class TacControlFlow:
                 log(f"\t[TAC][Cond][OR] Single term -> IF {cond_place}>0 GOTO {l_true}; GOTO {l_false}", channel="tac")
                 self.v.emitter.emitIfGoto(f"{cond_place} > 0", l_true)
                 self.v.emitter.emitGoto(l_false)
+                self.freeCondTemps(node, f"(OR single) '{node.getText()}'")
                 return
 
             # A || B || C ... → encadenar labels intermedios
@@ -135,6 +143,7 @@ class TacControlFlow:
                 log(f"\t[TAC][Cond][AND] Single term -> IF {cond_place}>0 GOTO {l_true}; GOTO {l_false}", channel="tac")
                 self.v.emitter.emitIfGoto(f"{cond_place} > 0", l_true)
                 self.v.emitter.emitGoto(l_false)
+                self.freeCondTemps(node, f"(AND single) '{node.getText()}'")
                 return
 
 
@@ -160,6 +169,7 @@ class TacControlFlow:
         log(f"\t[TAC][Cond][BASE] IF {cond_place}>0 GOTO {l_true}; GOTO {l_false}", channel="tac")
         self.v.emitter.emitIfGoto(f"{cond_place} > 0", l_true)
         self.v.emitter.emitGoto(l_false)
+        self.freeCondTemps(node, f"(BASE) '{node.getText()}'")
 
     # ---------------- if / else ----------------
 

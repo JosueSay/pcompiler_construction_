@@ -83,9 +83,13 @@ class TacReturns:
 
         # Liberar temporales asociados a la expresión, si corresponde
         try:
-            freeIfTemp(ctx.expression(), self.v.emitter.temp_pool, "*")
-            log(f"\t[temp] Freed temporary(s) for {ret_place}", channel="tac")
+            freed = freeIfTemp(ctx.expression(), self.v.emitter.temp_pool, "*")
         except Exception:
+            freed = False
+
+        if freed:
+            log(f"\t[temp] Freed temporary(s) for {ret_place}", channel="tac")
+        else:
             log(f"\t[temp] No temporaries to free for {ret_place}", channel="tac")
 
         if hasattr(self.v.emitter, "markFlowTerminated"):

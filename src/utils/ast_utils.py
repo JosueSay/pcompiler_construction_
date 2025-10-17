@@ -240,17 +240,23 @@ def isTempNode(node) -> bool:
     return bool(getattr(node, "_is_temp", False))
 
 
-def freeIfTemp(node, temp_pool, kind: str = "*") -> None:
-    """Libera el temporal asociado al nodo (si existe)."""
+def freeIfTemp(node, temp_pool, kind: str = "*") -> bool:
+    """
+    Libera el temporal asociado al nodo (si existe).
+    Devuelve:
+      - True  si efectivamente liberó un temporal
+      - False si no había temporal o si falló la liberación
+    """
     if not isTempNode(node):
-        return
+        return False
     name = getPlace(node)
     if not name:
-        return
+        return False
     try:
         temp_pool.free(name, kind)
+        return True
     except Exception:
-        pass
+        return False
 
 
 def deepPlace(node) -> Tuple[str | None, bool]:
