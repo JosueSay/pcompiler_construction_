@@ -44,6 +44,14 @@ class TacControlFlow:
         log(f"[TAC_CONTROL_FLOW] switch_ctx_stack initialized: {self.switch_ctx_stack}", channel="tac")
         log(f"[TAC_CONTROL_FLOW] while_seq initialized: {self.while_seq}\n", channel="tac")
 
+    def logTempPool(self, note: str) -> None:
+        try:
+            tp = getattr(self.v.emitter, "temp_pool", None)
+            desc = repr(tp)
+        except Exception:
+            desc = "<temp_pool repr unavailable>"
+        log(f"[temps] {note} :: {desc}", channel="tac")
+
     def unwrapCondCore(self, n):
         # expression -> assignmentExpr -> conditionalExpr -> logicalOrExpr
         if isinstance(n, CompiscriptParser.ExpressionContext):
@@ -93,6 +101,7 @@ class TacControlFlow:
                 self.v.visit(node)
                 p, _ = deepPlace(node)
                 cond_place = p or node.getText()
+                self.logTempPool(f"after evaluating cond OR(single) '{node.getText()}', cond_place={cond_place}")
                 log(f"\t[TAC][Cond][OR] Single term -> IF {cond_place}>0 GOTO {l_true}; GOTO {l_false}", channel="tac")
                 self.v.emitter.emitIfGoto(f"{cond_place} > 0", l_true)
                 self.v.emitter.emitGoto(l_false)
@@ -122,10 +131,12 @@ class TacControlFlow:
                 self.v.visit(node)
                 p, _ = deepPlace(node)
                 cond_place = p or node.getText()
+                self.logTempPool(f"after evaluating cond AND(single) '{node.getText()}', cond_place={cond_place}")
                 log(f"\t[TAC][Cond][AND] Single term -> IF {cond_place}>0 GOTO {l_true}; GOTO {l_false}", channel="tac")
                 self.v.emitter.emitIfGoto(f"{cond_place} > 0", l_true)
                 self.v.emitter.emitGoto(l_false)
                 return
+
 
             # A && B && C ... → encadenar labels intermedios
             next_label = None
@@ -145,6 +156,7 @@ class TacControlFlow:
         self.v.visit(node)
         p, _ = deepPlace(node)
         cond_place = p or node.getText()
+        self.logTempPool(f"after evaluating cond BASE '{node.getText()}', cond_place={cond_place}")
         log(f"\t[TAC][Cond][BASE] IF {cond_place}>0 GOTO {l_true}; GOTO {l_false}", channel="tac")
         self.v.emitter.emitIfGoto(f"{cond_place} > 0", l_true)
         self.v.emitter.emitGoto(l_false)
@@ -181,8 +193,11 @@ class TacControlFlow:
 
         # --- Then block ---
         self.v.emitter.emitLabel(l_then)
+        self.logTempPool(f"before THEN block {l_then}")
         log(f"\t[TAC][if] Entering THEN block -> {l_then}", channel="tac")
         then_result = self.v.visit(then_stmt) or {"terminated": False, "reason": None}
+        self.logTempPool(f"after THEN block {l_then}")
+
 
         # --- Else block ---
         if else_stmt is not None:
@@ -192,13 +207,15 @@ class TacControlFlow:
                 log(f"\t[TAC][if] THEN falls through -> GOTO {l_end}", channel="tac")
 
             self.v.emitter.emitLabel(l_else)
+            self.logTempPool(f"before ELSE block {l_else}")
             log(f"\t[TAC][if] Entering ELSE block -> {l_else}", channel="tac")
 
             if bool(then_result.get("terminated")):
-                
                 self.v.emitter.clearFlowTermination()
 
             else_result = self.v.visit(else_stmt) or {"terminated": False, "reason": None}
+            self.logTempPool(f"after ELSE block {l_else}")
+
         else:
             else_result = {"terminated": False, "reason": None}
 
@@ -248,10 +265,14 @@ class TacControlFlow:
         self.v.emitter.emitLabel(l_start)
         log(f"\t[TAC][while] Evaluating condition -> {cond_ctx.getText()}", channel="tac")
         self.visitCond(cond_ctx, l_body, l_end)
+        self.logTempPool("after WHILE condition")
 
         self.v.emitter.emitLabel(l_body)
+        self.logTempPool(f"before WHILE body {l_body}")
         log(f"\t[TAC][while] Entering body -> {l_body}", channel="tac")
         self.v.visit(body)
+        self.logTempPool(f"after WHILE body {l_body}")
+
         self.v.emitter.emitGoto(l_start)
 
         self.v.emitter.emitLabel(l_end)
@@ -279,12 +300,16 @@ class TacControlFlow:
         self.v.loop_depth += 1
 
         self.v.emitter.emitLabel(l_body)
+        self.logTempPool(f"before DO body {l_body}")
         log(f"\t[TAC][do] Entering body -> {l_body}", channel="tac")
         self.v.visit(body)
+        self.logTempPool(f"after DO body {l_body}")
 
         self.v.emitter.emitLabel(l_cond)
         log(f"\t[TAC][do] Evaluating condition -> {cond_ctx.getText()}", channel="tac")
         self.visitCond(cond_ctx, l_body, l_end)
+        self.logTempPool("after DO condition")
+
 
         self.v.emitter.emitLabel(l_end)
         log(f"\t[TAC][do] End loop -> {l_end}", channel="tac")
@@ -317,15 +342,19 @@ class TacControlFlow:
 
         is_assign_like = contains(step_ctx, (AssignCtx, PropAssignCtx))
 
+        self.logTempPool("before FOR step")
         if is_assign_like:
             log(f"\t[TAC][for] Emitting assignment-like step -> {step_ctx.getText()}", channel="tac")
             self.v.stmts.visitAssignment(step_ctx)
         else:
             log(f"\t[TAC][for] Emitting effect-only step -> {step_ctx.getText()}", channel="tac")
             self.v.visit(step_ctx)
+        self.logTempPool("after FOR step (pre-reset)")
 
         self.v.emitter.temp_pool.resetPerStatement()
         log(f"\t[TAC][for] Reset temporals for step", channel="tac")
+        self.logTempPool("after FOR step (post-reset)")
+
 
     
     def visitForStatement(self, ctx: CompiscriptParser.ForStatementContext):
@@ -388,17 +417,23 @@ class TacControlFlow:
         self.v.loop_depth += 1
 
         self.v.emitter.emitLabel(l_start)
+
+            
         if cond_ctx is None:
             log(f"\t[TAC][for] No condition, jumping to body -> {l_body}", channel="tac")
             self.v.emitter.emitGoto(l_body)
         else:
             log(f"\t[TAC][for] Evaluating condition -> {cond_ctx.getText()}", channel="tac")
             self.visitCond(cond_ctx, l_body, l_end)
+            self.logTempPool("after FOR condition")
 
         self.v.emitter.emitLabel(l_body)
+        self.logTempPool(f"before FOR body {l_body}")
         log(f"\t[TAC][for] Entering body -> {l_body}", channel="tac")
         if body is not None:
             self.v.visit(body)
+        self.logTempPool(f"after FOR body {l_body}")
+            
 
         if step is not None:
             if self.loop_ctx_stack[-1].get("has_continue"):
@@ -424,8 +459,10 @@ class TacControlFlow:
 
         self.v.visit(discr)
         sw_place, _ = deepPlace(discr)
-        if not sw_place:   # fallback por si fuera literal raro (no debería)
+        if not sw_place:
             sw_place = discr.getText()
+        self.logTempPool(f"after SWITCH discriminant '{discr.getText()}', sw_place={sw_place}")
+
 
         discr_text = discr.getText()
         log(f"\n[TAC][switch] Discriminant -> {discr_text}", channel="tac")
@@ -500,9 +537,9 @@ class TacControlFlow:
             cv_place, _ = deepPlace(case_expr)
             if not cv_place:
                 cv_place = case_expr.getText()
-
-            # IF sw_place == cv_place GOTO l_case
+            self.logTempPool(f"after SWITCH case expr '{case_expr.getText()}', cv_place={cv_place}")
             self.v.emitter.emitIfGoto(f"{sw_place} == {cv_place}", l_case)
+
 
 
         self.v.emitter.emitGoto(l_def)

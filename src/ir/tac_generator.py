@@ -18,6 +18,14 @@ class TacGenerator(CompiscriptVisitor):
     Emite quads a través de `self.emitter`.
     """
 
+    def logTempPool(self, note: str) -> None:
+        try:
+            tp = getattr(self.emitter, "temp_pool", None)
+            desc = repr(tp)
+        except Exception:
+            desc = "<temp_pool repr unavailable>"
+        log(f"[TacGenerator][temps] {note} :: {desc}", channel="tac")
+
     
     def __init__(self, base_semantic_visitor, emitter=None):
         log("[TacGenerator] init", channel="tac")
@@ -37,6 +45,19 @@ class TacGenerator(CompiscriptVisitor):
 
         # Emitter (puede venir del visitor semántico o inyectarse)
         self.emitter = emitter if emitter is not None else getattr(base_semantic_visitor, "emitter")
+        try:
+            if hasattr(self.emitter, "temp_pool") and hasattr(self.emitter.temp_pool, "resetPerStatement"):
+                self.emitter.temp_pool.resetPerStatement()
+                log("[TacGenerator] temp_pool.resetPerStatement() at init", channel="tac")
+                # Nota visual del estado inicial del pool
+                try:
+                    desc = repr(self.emitter.temp_pool)
+                except Exception:
+                    desc = "<temp_pool repr unavailable>"
+                log(f"[TacGenerator][temps] init :: {desc}", channel="tac")
+        except Exception:
+            pass        
+        
 
         # Ensamblado de sub-visitors TAC
         self.lvalues  = TacLValues(self)
@@ -46,6 +67,8 @@ class TacGenerator(CompiscriptVisitor):
         self.tmethods = TacMethods(self)
         self.treturns = TacReturns(self) if TacReturns is not None else None
         self.stmts    = TacStatements(self)
+
+
 
 
     # Devuelve el primer nodo si la llamada retorna lista; si no, el propio valor
@@ -79,23 +102,41 @@ class TacGenerator(CompiscriptVisitor):
     # ---------- Raíz ----------
     def visitProgram(self, ctx: CompiscriptParser.ProgramContext):
         log("[TacGenerator] visitProgram - empezando a generar TAC a nivel toplevel", channel="tac")
+        self.logTempPool("program start")
 
         for st in ctx.statement():
             cd = self.h_First(st, "classDeclaration")
             fd = self.h_First(st, "functionDeclaration")
 
             if cd is not None:
+                self.logTempPool("before top-level class")
                 log(f"[TacGenerator] visitProgram - clase detectada: {self.h_IdentText(cd)}", channel="tac")
                 self.visitClassDeclaration(cd)
+                self.logTempPool("after top-level class (pre-reset)")
             elif fd is not None:
+                self.logTempPool("before top-level function")
                 log(f"[TacGenerator] visitProgram - función detectada: {self.h_IdentText(fd)}", channel="tac")
                 self.visitFunctionDeclaration(fd)
+                self.logTempPool("after top-level function (pre-reset)")
             else:
+                self.logTempPool("before top-level statement")
                 log("[TacGenerator] visitProgram - statement toplevel no clase/función", channel="tac")
                 self.visit(st)
+                self.logTempPool("after top-level statement (pre-reset)")
 
+            # Reset conservador por statement a nivel toplevel, para no arrastrar temporales.
+            try:
+                if hasattr(self.emitter, "temp_pool") and hasattr(self.emitter.temp_pool, "resetPerStatement"):
+                    self.emitter.temp_pool.resetPerStatement()
+                    log("[TacGenerator] visitProgram - temp_pool.resetPerStatement() after toplevel item", channel="tac")
+                    self.logTempPool("after toplevel resetPerStatement")
+            except Exception:
+                pass
+
+        self.logTempPool("program end")
         log("[TacGenerator] visitProgram - fin de generación TAC toplevel", channel="tac")
         return None
+
 
     # ---------- Clases / Funciones ----------
     def visitClassDeclaration(self, ctx: CompiscriptParser.ClassDeclarationContext):
