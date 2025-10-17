@@ -44,8 +44,7 @@ class TacReturns:
         expected = self.v.fn_stack[-1]      # tipo de retorno esperado
         has_expr = ctx.expression() is not None
 
-        # Función auxiliar para finalizar correctamente el flujo
-        def _end(value=None):
+        def endReturn(value=None):
             """
             Emite RETURN en TAC y marca flujo como terminado.
             NO cierra la función aquí: el epílogo único lo hace TacFunctions.
@@ -67,11 +66,11 @@ class TacReturns:
 
         # Caso 1: función void → siempre return sin valor
         if isinstance(expected, VoidType):
-            return _end(None)
+            return endReturn(None)
 
         # Caso 2: función no-void sin expresión → conservador: RETURN None
         if not has_expr:
-            return _end("None")
+            return endReturn("None")
 
         # Caso 3: función no-void con expresión → evaluamos y retornamos expr
         self.v.visit(ctx.expression())

@@ -1,6 +1,6 @@
 from antlr_gen.CompiscriptParser import CompiscriptParser
 from semantic.custom_types import ArrayType, ErrorType, FunctionType, ClassType, VoidType
-from logs.logger import log, logFunction
+from logs.logger import log
 from utils.ast_utils import getPlace, setPlace, deepPlace, typeToTempKind
 from ir.tac import Op
 from ir.addr_format import place_of_symbol
@@ -29,7 +29,7 @@ class TacLValues:
 
 
     # --------------------------- util interno ----------------------------
-    def _sym_type(self, name: str):
+    def symType(self, name: str):
         """Resuelve el tipo de un símbolo local/global probando varios nombres de atributo."""
         try:
             sym = self.v.scopeManager.lookup(name)
@@ -87,7 +87,7 @@ class TacLValues:
                 base_type = ClassType(owner)
         if base_type is None:
             # buscar tipo del símbolo con heurística robusta
-            st = self._sym_type(base_place)
+            st = self.symType(base_place)
             if st is not None:
                 base_type = st
             else:
@@ -158,6 +158,29 @@ class TacLValues:
                 args_nodes = list(suf.arguments().expression()) if suf.arguments() else []
                 for e in args_nodes:
                     self.v.visit(e)
+                    
+                expected_params = None
+                # a) Si es método enlazado, podemos reconstruir la firma desde method_registry
+                owner = getattr(base_type, "_decl_owner", None) or getattr(base_type, "_bound_receiver", None)
+                mname = getattr(base_type, "_method_name", None)
+                if owner and mname:
+                    sig = self.v.method_registry.lookupMethod(f"{owner}.{mname}")
+                    if sig:
+                        param_types, _ret = sig
+                        # param_types incluye 'this' como primer parámetro → restamos 1 para args explícitos
+                        expected_params = max(0, len(param_types) - 1)
+
+                # b) Si es función global (FunctionType con param_types)
+                elif isinstance(base_type, FunctionType):
+                    try:
+                        expected_params = len(getattr(base_type, "param_types", []) or [])
+                    except Exception:
+                        expected_params = None
+
+                # Log de desajuste
+                if expected_params is not None and expected_params != len(args_nodes):
+                    log(f"\t[TAC_LVALUES][warn] arity mismatch: expected={expected_params}, passed={len(args_nodes)} "
+                        f"for call base='{base_place}'", channel="tac")
 
                 n_params = 0
 
@@ -181,6 +204,13 @@ class TacLValues:
                 is_function_type = isinstance(base_type, FunctionType)
                 can_be_closure = is_function_type and recv_place is None and base_is_temp
                 ret_t = getattr(base_type, "return_type", None) or VoidType()
+
+                callee_text = getattr(ctx.primaryAtom(), "getText", lambda: str(base_place))()
+                is_method = (recv_place is not None) or (getattr(base_type, "_method_name", None) is not None)
+                label_preview = getattr(base_type, "_label", None)
+                log(f"\t[TacLValues][call] callee={callee_text}, is_method={is_method}, "
+                    f"expected_params={expected_params}, passed={len(args_nodes)}, "
+                    f"label={label_preview}", channel="tac")
 
                 if can_be_closure:
                     clos_place = base_place
@@ -216,6 +246,10 @@ class TacLValues:
                             f_label = getattr(fsym, "label", None) or f"{base_name}"
                         except Exception:
                             f_label = f"{base_name}"
+
+                log(f"\t[TacLValues][call] callee={callee_text}, is_method={is_method}, "
+                    f"expected_params={expected_params}, passed={len(args_nodes)}, "
+                    f"label={f_label}", channel="tac")
 
                 if isinstance(ret_t, VoidType):
                     self.v.emitter.emitCall(f_label, n_params)
@@ -267,10 +301,10 @@ class TacLValues:
                     setPlace(suf, base_place, True)
                     continue
 
-                # Método (con herencia) —> necesitamos el owner aunque base_type sea None
+                # Método (con herencia)
                 owner = getattr(base_type, "name", None)
                 if owner is None:
-                    st = self._sym_type(base_place)
+                    st = self.symType(base_place)
                     if isinstance(st, ClassType):
                         owner = st.name
                     elif base_place == "this":
@@ -310,7 +344,6 @@ class TacLValues:
                         pass
 
                     base_type = ftype
-                    # ¡ojo! mantenemos base_place (el receptor) para la call
                     setPlace(suf, base_place, base_is_temp)
                     continue
 

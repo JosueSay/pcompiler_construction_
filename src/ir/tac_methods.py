@@ -86,7 +86,11 @@ class TacMethods:
 
         # --- Contexto del método y scope ---
         sm = self.v.scopeManager
-        func_scope_id = getattr(fsym, "func_scope_id", None)  # usar el scope real de ejecución
+        func_scope_id = (
+            getattr(fsym, "func_scope_id", None)
+            if getattr(fsym, "func_scope_id", None) is not None
+            else getattr(fsym, "fn_scope_id", None)
+        )
         restore_id = sm.currentScopeId()  # llamar al método, no usar atributo
         pushed = False
 
