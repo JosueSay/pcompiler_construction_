@@ -234,14 +234,18 @@ class TacControlFlow:
         else_term  = bool(else_result.get("terminated")) if else_stmt is not None else False
         both_terminate = then_term and (else_stmt is not None) and else_term
 
-        # --- End label (solo si hace falta) ---
-        # - Con ELSE: emitimos END solo si NO terminan ambas ramas (hay camino que cae).
-        # - Sin ELSE: nunca lo necesitamos (tampoco emitimos GOTO hacia END).
-        if else_stmt is not None and not both_terminate:
+        # --- End label ---
+        # Con ELSE: colocamos END solo si NO terminan ambas ramas.
+        # Sin ELSE: SIEMPRE colocamos END porque visitCond ya emitió GOTO hacia l_end.
+        if else_stmt is None:
+            self.v.emitter.emitLabel(l_end)
+            log(f"\t[TAC][if] End IF (no else) -> {l_end}", channel="tac")
+        elif not both_terminate:
             self.v.emitter.emitLabel(l_end)
             log(f"\t[TAC][if] End IF/ELSE -> {l_end}", channel="tac")
         else:
-            log(f"\t[TAC][if] End label suppressed (no incoming jumps)", channel="tac")
+            log(f"\t[TAC][if] End label suppressed (both branches terminate)", channel="tac")
+
 
         if both_terminate:
             log(f"\t[TAC][if] Both THEN and ELSE blocks terminate", channel="tac")
