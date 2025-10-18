@@ -31,6 +31,8 @@ class LValuesAnalyzer:
         try:
             # Tipo base del átomo
             base_type = self.v.visit(ctx.primaryAtom())
+            log(f"[LHS] inicio: {ctx.getText()}, base_type inicial={base_type}", channel="semantic")
+
             try:
                 setattr(ctx.primaryAtom(), "_type", base_type)
             except Exception:
@@ -52,6 +54,8 @@ class LValuesAnalyzer:
                 pass
 
             for suf in ctx.suffixOp():
+                log(f"[LHS] suffixOp: {type(suf).__name__}, base_type antes={base_type}", channel="semantic")
+
                 # ---------------------------
                 # IndexExpr
                 if isinstance(suf, CompiscriptParser.IndexExprContext):
@@ -91,6 +95,8 @@ class LValuesAnalyzer:
                             pass
 
                     base_type = base_type.elem_type
+                    log(f"[LHS] IndexExpr: base_type actualizado={base_type}", channel="semantic")
+
                     if isinstance(lit_t, ArrayType):
                         lit_t = lit_t.elem_type
                     continue
@@ -132,6 +138,8 @@ class LValuesAnalyzer:
                         continue
 
                     base_type = base_type.return_type if base_type.return_type else VoidType()
+                    log(f"[LHS] CallExpr: base_type actualizado={base_type}", channel="semantic")
+
                     continue
 
                 # ---------------------------
@@ -151,7 +159,10 @@ class LValuesAnalyzer:
                     if attr_t:
                         base_type = attr_t
                         lit_t = None
+                        log(f"[LHS] PropertyAccessExpr: {prop_name}, base_type actualizado={base_type}", channel="semantic")
                         continue
+                    
+
 
                     sig = self.v.method_registry.lookupMethod(f"{class_name}.{prop_name}")
                     if sig is None:
