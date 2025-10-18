@@ -1,5 +1,5 @@
 from antlr_gen.CompiscriptParser import CompiscriptParser
-from logs.logger import log, logFunction
+from logs.logger import log
 from semantic.custom_types import VoidType
 from utils.ast_utils import findFunctionSymbol
 

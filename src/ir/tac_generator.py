@@ -140,7 +140,7 @@ class TacGenerator(CompiscriptVisitor):
         log(f"[TacGenerator][layout] {class_name} -> {layout}", channel="tac")
 
     # Devuelve el primer nodo si la llamada retorna lista; si no, el propio valor
-    def h_First(self, ctx, name):
+    def hFirst(self, ctx, name):
         m = getattr(ctx, name, None)
         if not callable(m):
             return None
@@ -150,7 +150,7 @@ class TacGenerator(CompiscriptVisitor):
         return r
 
     # Devuelve el texto del primer Identifier (soporta lista o único)
-    def h_IdentText(self, ctx):
+    def hIdentText(self, ctx):
         idm = getattr(ctx, "Identifier", None)
         if not callable(idm):
             return "<anon>"
@@ -173,17 +173,17 @@ class TacGenerator(CompiscriptVisitor):
         self.logTempPool("program start")
 
         for st in ctx.statement():
-            cd = self.h_First(st, "classDeclaration")
-            fd = self.h_First(st, "functionDeclaration")
+            cd = self.hFirst(st, "classDeclaration")
+            fd = self.hFirst(st, "functionDeclaration")
 
             if cd is not None:
                 self.logTempPool("before top-level class")
-                log(f"[TacGenerator] visitProgram - clase detectada: {self.h_IdentText(cd)}", channel="tac")
+                log(f"[TacGenerator] visitProgram - clase detectada: {self.hIdentText(cd)}", channel="tac")
                 self.visitClassDeclaration(cd)
                 self.logTempPool("after top-level class (pre-reset)")
             elif fd is not None:
                 self.logTempPool("before top-level function")
-                log(f"[TacGenerator] visitProgram - función detectada: {self.h_IdentText(fd)}", channel="tac")
+                log(f"[TacGenerator] visitProgram - función detectada: {self.hIdentText(fd)}", channel="tac")
                 self.visitFunctionDeclaration(fd)
                 self.logTempPool("after top-level function (pre-reset)")
             else:
@@ -208,7 +208,7 @@ class TacGenerator(CompiscriptVisitor):
 
     # ---------- Clases / Funciones ----------
     def visitClassDeclaration(self, ctx: CompiscriptParser.ClassDeclarationContext):
-        class_name = self.h_IdentText(ctx)
+        class_name = self.hIdentText(ctx)
         log(f"[TacGenerator] visitClassDeclaration - clase: {class_name}", channel="tac")
         res = self.tmethods.visitClassDeclaration(ctx)
 
@@ -220,7 +220,7 @@ class TacGenerator(CompiscriptVisitor):
         return res
 
     def visitFunctionDeclaration(self, ctx: CompiscriptParser.FunctionDeclarationContext):
-        log(f"[TacGenerator] visitFunctionDeclaration - función: {self.h_IdentText(ctx)}", channel="tac")
+        log(f"[TacGenerator] visitFunctionDeclaration - función: {self.hIdentText(ctx)}", channel="tac")
         return self.tfuncs.visitFunctionDeclaration(ctx)
 
     # ---------- Control de flujo ----------

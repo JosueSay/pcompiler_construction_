@@ -79,9 +79,8 @@ class TacReturns:
 
         log(f"\t[expr] Evaluated return expression → {ret_place}", channel="tac")
 
-        self.v.emitter.emit(Op.RETURN, arg1=ret_place)
-
-        # Liberar temporales asociados a la expresión, si corresponde
+        # Liberar temporales asociados a la expresión ANTES de emitir RETURN
+        # (permite reciclarlos si el backend/opt lo considera)
         try:
             freed = freeIfTemp(ctx.expression(), self.v.emitter.temp_pool, "*")
         except Exception:
@@ -92,9 +91,4 @@ class TacReturns:
         else:
             log(f"\t[temp] No temporaries to free for {ret_place}", channel="tac")
 
-        if hasattr(self.v.emitter, "markFlowTerminated"):
-            self.v.emitter.markFlowTerminated()
-
-        self.v.stmt_just_terminated = "return"
-        self.v.stmt_just_terminator_node = ctx
-        return {"terminated": True, "reason": "return"}
+        return endReturn(ret_place)

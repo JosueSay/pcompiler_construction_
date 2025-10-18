@@ -1,4 +1,5 @@
 from __future__ import annotations
+from logs.logger import log
 
 
 class LabelMaker:
@@ -16,7 +17,11 @@ class LabelMaker:
     def newLabel(self, prefix: str = "L") -> str:
         """
         Crea una etiqueta única con el prefijo dado.
-        Mantiene compatibilidad con Emitter.newLabel(...).
         """
         self.next_id += 1
-        return f"{prefix}{self.next_id}"
+        label = f"{prefix}{self.next_id}"
+        try:
+            log(f"[Labels] newLabel -> {label}", channel="tac")
+        except Exception:
+            pass
+        return label

@@ -26,6 +26,15 @@ class TempPool:
         self.free_by_kind = defaultdict(list)  # kind -> [tN, ...]
         self.kind_of: dict[str, str] = {}      # tN -> kind
         self.leased_stmt: set[str] = set()
+    
+    def __repr__(self) -> str:
+        try:
+            kinds = sorted(self.free_by_kind.keys())
+            free_desc = ", ".join(f"{k}:{list(self.free_by_kind[k])}" for k in kinds if self.free_by_kind[k])
+            leased = sorted(self.leased_stmt)
+            return f"<TempPool next={self.next_id} leased={leased} free={{ {free_desc} }}>"
+        except Exception:
+            return f"<TempPool next={self.next_id}>"
 
     def newTemp(self, kind: str = "*") -> str:
         """
@@ -52,6 +61,9 @@ class TempPool:
         if not name or not isinstance(name, str) or not name.startswith("t") or not name[1:].isdigit():
             return
         k = self.kind_of.get(name, kind or "*")
+        # Evita double-free (mismo tN ya en la free-list)
+        if name in self.free_by_kind[k]:
+            return
         self.free_by_kind[k].append(name)
         self.leased_stmt.discard(name)
         log(f"\t\t[TempPool][pool] free  {name} ({k})", channel="tac")

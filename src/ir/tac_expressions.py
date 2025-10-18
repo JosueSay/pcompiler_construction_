@@ -179,7 +179,7 @@ class TacExpressions:
 
             # 2) ahora pedir el nuevo temporal (podría reutilizar el del right)
             t = self.v.emitter.temp_pool.newTemp("*")
-            self.v.emitter.emit(Op.BINARY, arg1=current_place, arg2=right_place, res=t, label=op_txt)
+            self.v.emitter.emitBinary(t, current_place, op_txt, right_place)
             log(f"\t[TAC][expr] binary {op_txt}: {current_place}, {right_place} -> {t}", channel="tac")
 
             # 3) liberar el operando izquierdo si era temp (ya no se usa)
@@ -225,7 +225,7 @@ class TacExpressions:
 
             # 2) pedir el temporal booleano (puede reutilizar el recién liberado)
             t = self.v.emitter.temp_pool.newTemp("bool")
-            self.v.emitter.emit(Op.BINARY, arg1=last_place, arg2=right_place, res=t, label=op_txt)
+            self.v.emitter.emitBinary(t, last_place, op_txt, right_place)
             log(f"\t[TAC][expr] relational {op_txt}: {last_place}, {right_place} -> {t}", channel="tac")
 
             # 3) liberar el operando izquierdo si era temp
@@ -270,7 +270,7 @@ class TacExpressions:
 
             # 2) pedir el temporal booleano (posible reutilización)
             t = self.v.emitter.temp_pool.newTemp("bool")
-            self.v.emitter.emit(Op.BINARY, arg1=current_place, arg2=right_place, res=t, label="&&")
+            self.v.emitter.emitBinary(t, current_place, "&&", right_place)
             log(f"\t[TAC][expr] logical AND: {current_place}, {right_place} -> {t}", channel="tac")
 
             # 3) liberar el operando izquierdo si era temp
@@ -309,7 +309,7 @@ class TacExpressions:
 
             # 2) pedir el temporal booleano (posible reutilización)
             t = self.v.emitter.temp_pool.newTemp("bool")
-            self.v.emitter.emit(Op.BINARY, arg1=current_place, arg2=right_place, res=t, label="||")
+            self.v.emitter.emitBinary(t, current_place, "||", right_place)
             log(f"\t[TAC][expr] logical OR: {current_place}, {right_place} -> {t}", channel="tac")
 
             # 3) liberar el operando izquierdo si era temp

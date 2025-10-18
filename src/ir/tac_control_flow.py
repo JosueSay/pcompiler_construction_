@@ -1,12 +1,11 @@
-from antlr4.tree.Tree import TerminalNode
 from typing import Any
 from antlr_gen.CompiscriptParser import CompiscriptParser
-from logs.logger import log, logFunction
+from logs.logger import log
 from utils.ast_utils import (
     walk, extractNotInner,
-    asList, maybeCall, safeAttr, firstExpression,
-    splitAssignmentText, isAssignText, collectStmtOrBlock,
-    firstSwitchDiscriminant, hasDefaultClause, deepPlace, freeIfTemp  
+    asList, safeAttr, firstExpression,
+    isAssignText, collectStmtOrBlock,
+    firstSwitchDiscriminant, hasDefaultClause, deepPlace, freeIfTemp
 )
 
 
@@ -38,7 +37,7 @@ class TacControlFlow:
         self.loop_ctx_stack: list[dict[str, str]] = []
         self.switch_ctx_stack: list[dict[str, str]] = []
         self.while_seq: int = -1
-        self.if_seq: int = -1
+        # self.if_seq: int = -1
 
         log(f"[TAC_CONTROL_FLOW] loop_ctx_stack initialized: {self.loop_ctx_stack}", channel="tac")
         log(f"[TAC_CONTROL_FLOW] switch_ctx_stack initialized: {self.switch_ctx_stack}", channel="tac")
@@ -304,9 +303,9 @@ class TacControlFlow:
         body = safeAttr(ctx, "statement") or safeAttr(ctx, "body") or safeAttr(ctx, "block")
         cond_ctx = safeAttr(ctx, "expression") or safeAttr(ctx, "cond") or safeAttr(ctx, "condition")
 
-        l_body = self.v.emitter.newLabel("Lbody")
-        l_cond = self.v.emitter.newLabel("Lcond")
-        l_end = self.v.emitter.newLabel("Lend")
+        l_body = self.v.emitter.newLabel("DO_BODY")
+        l_cond = self.v.emitter.newLabel("DO_COND")
+        l_end  = self.v.emitter.newLabel("DO_END")
 
         log(f"\n[TAC][do] Labels -> body={l_body}, cond={l_cond}, end={l_end}", channel="tac")
 
@@ -420,10 +419,10 @@ class TacControlFlow:
             log(f"\t[TAC][for] Emitting init -> {init.getText()}", channel="tac")
             self.v.visit(init)
 
-        l_start = self.v.emitter.newLabel("Lstart")
-        l_body  = self.v.emitter.newLabel("Lbody")
-        l_end   = self.v.emitter.newLabel("Lend")
-        l_step  = self.v.emitter.newLabel("Lstep") if step is not None else l_start
+        l_start = self.v.emitter.newLabel("FOR_START")
+        l_body  = self.v.emitter.newLabel("FOR_BODY")
+        l_end   = self.v.emitter.newLabel("FOR_END")
+        l_step  = self.v.emitter.newLabel("FOR_STEP") if step is not None else l_start
 
         log(f"\n[TAC][for] Labels -> start={l_start}, body={l_body}, step={l_step}, end={l_end}", channel="tac")
 
