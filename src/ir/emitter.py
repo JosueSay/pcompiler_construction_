@@ -34,7 +34,6 @@ class Emitter:
         self.addHeaderLine(f"; program: {self.program_name}")
         self.addHeaderLine(f"; generated: {datetime.now().isoformat(timespec='seconds')}")
 
-
     # ---------- cabecera / control ----------
 
     def addHeaderLine(self, text: str) -> None:
@@ -165,8 +164,6 @@ class Emitter:
         log(f"[Emitter.lowerFieldStore] {base}[{idx0}+{off}] := {value_place}", channel="tac")
         return q
 
-
-
     # ---------- emisión básica ----------
 
     def emit(
@@ -243,11 +240,41 @@ class Emitter:
     def emitAssign(self, dst: str, src: str) -> None:
         self.emit(Op.ASSIGN, arg1=src, res=dst)
 
+    def foldBinary(self, left: str, op_text: str, right: str) -> str | None:
+        """
+        Peephole muy simple para +:
+        - 0 + 0 -> 0
+        - 0 + x -> x
+        - x + 0 -> x
+        Se puede extender luego a -, *, etc.
+        """
+        if op_text != "+":
+            return None
+
+        if left == "0" and right == "0":
+            return "0"
+        if left == "0":
+            return right
+        if right == "0":
+            return left
+        return None
+
     def emitBinary(self, dst: str, left: str, op_text: str, right: str) -> None:
+        folded = self.foldBinary(left, op_text, right)
+        if folded is not None:
+            # Se reduce a una asignación directa
+            self.emitAssign(dst, folded)
+            return
         self.emit(Op.BINARY, arg1=left, arg2=right, res=dst, label=op_text)
 
     def emitUnary(self, dst: str, op_text: str, value: str) -> None:
         self.emit(Op.UNARY, arg1=value, res=dst, label=op_text)
+
+    def emitIndexLoad(self, dst: str, base_place: str, index_place: str) -> Quad | None:
+        return self.emit(Op.INDEX_LOAD, arg1=base_place, arg2=index_place, res=dst)
+
+    def emitIndexStore(self, base_place: str, index_place: str, src_place: str) -> Quad | None:
+        return self.emit(Op.INDEX_STORE, arg1=base_place, arg2=index_place, res=src_place)
 
     def emitNewList(self, dest_place: str, n_elems: int) -> None:
         self.emit(Op.NEWLIST, arg1=n_elems, res=dest_place)
@@ -255,12 +282,29 @@ class Emitter:
     def emitLen(self, dest_place: str, arr_place: str) -> Quad | None:
         return self.emit(Op.LEN, arg1=arr_place, res=dest_place)
 
+    def emitParam(self, value_place: str) -> None:
+        self.emit(Op.PARAM, arg1=value_place)
+
+    def emitReturn(self, value_place: str | None = None) -> None:
+        if value_place is None or value_place == "":
+            self.emit(Op.RETURN)
+        else:
+            self.emit(Op.RETURN, arg1=value_place)
+
+    def emitNewObj(self, class_name: str, obj_size: int | str, dst_place: str) -> None:
+        self.emit(Op.NEWOBJ, arg1=class_name, arg2=str(obj_size), res=dst_place)
+
+    def emitMkEnv(self, captured_csv: str, dst_place: str) -> None:
+        self.emit(Op.MKENV, arg1=captured_csv, res=dst_place)
+
+    def emitMkClos(self, func_label: str, env_place: str, dst_place: str) -> None:
+        self.emit(Op.MKCLOS, arg1=func_label, arg2=env_place, res=dst_place)
+
     def emitFieldLoad(self, base_place: str, field_label: str | int, dst_place: str) -> Quad | None:
         return self.emit(Op.FIELD_LOAD, arg1=base_place, res=dst_place, label=field_label)
 
     def emitFieldStore(self, base_place: str, field_label: str | int, src_place: str) -> Quad | None:
         return self.emit(Op.FIELD_STORE, arg1=base_place, res=src_place, label=field_label)
-
 
     # ---------- patrón de bounds-check ----------
 
@@ -295,7 +339,6 @@ class Emitter:
         self.emitLabel(l_ok)
 
         return t_len, l_ok
-
 
     # ---------- helpers de función ----------
 
@@ -337,7 +380,6 @@ class Emitter:
         self.emit(Op.LEAVE, arg1=self.current_function)
         self.markFlowTerminated()
 
-
     # ---------- serialización ----------
 
     def toText(self) -> str:
@@ -358,9 +400,6 @@ class Emitter:
                 lines.extend(["\t" + p for p in parts])
 
         return "\n".join(lines) + "\n"
-
-
-
 
     def writeTacText(self, out_dir: str, stem: str, *, simple_names: bool = False) -> str:
         """

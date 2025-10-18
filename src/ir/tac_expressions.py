@@ -99,10 +99,10 @@ class TacExpressions:
             if captured:
                 args_txt = ",".join(captured) if captured else ""
                 env_t = self.v.emitter.temp_pool.newTemp("ref")
-                self.v.emitter.emit(Op.MKENV, arg1=args_txt, res=env_t)
+                self.v.emitter.emitMkEnv(args_txt, env_t)
                 clos_t = self.v.emitter.temp_pool.newTemp("ref")
                 f_label = getattr(sym, "label", None) or f"{sym.name}"
-                self.v.emitter.emit(Op.MKCLOS, arg1=f_label, arg2=env_t, res=clos_t)
+                self.v.emitter.emitMkClos(f_label, env_t, clos_t)
                 self.v.emitter.temp_pool.free(env_t, "*")
                 setPlace(ctx, clos_t, True)
                 log(f"\t[TAC][expr] closure created for function '{name}' -> {clos_t}", channel="tac")
@@ -126,14 +126,15 @@ class TacExpressions:
     def visitArrayLiteral(self, ctx):
         expr_ctxs = list(ctx.expression()) or []
         t_list = self.v.emitter.temp_pool.newTemp("ref")
-        self.v.emitter.emit(Op.NEWLIST, arg1=len(expr_ctxs), res=t_list)
+        
+        self.v.emitter.emitNewList(t_list, len(expr_ctxs))
         log(f"\t[TAC][expr] new array/list temp: {t_list} with {len(expr_ctxs)} elements", channel="tac")
 
         for k, ek in enumerate(expr_ctxs):
             self.v.visit(ek)
             p, it = deepPlace(ek)
             elem_place = p or ek.getText()
-            self.v.emitter.emit(Op.INDEX_STORE, arg1=t_list, res=elem_place, label=k)
+            self.v.emitter.emitIndexStore(t_list, str(k), elem_place)
             log(f"\t[TAC][expr] array element {k}: {elem_place}", channel="tac")
             if it:
                 self.v.emitter.temp_pool.free(elem_place, "*")
@@ -333,7 +334,7 @@ class TacExpressions:
             inner_place = getPlace(inner_node) or deepPlace(inner_node)[0] or inner_node.getText()
 
             t = self.v.emitter.temp_pool.newTemp("bool" if op_txt == "!" else "*")
-            self.v.emitter.emit(Op.UNARY, arg1=inner_place, res=t, label=op_txt)
+            self.v.emitter.emitUnary(t, op_txt, inner_place)
             freeIfTemp(inner_node, self.v.emitter.temp_pool, "*")
             setPlace(ctx, t, True)
             log(f"\t[TAC][expr] unary {op_txt}: {inner_place} -> {t}", channel="tac")
@@ -360,7 +361,7 @@ class TacExpressions:
             obj_size = 0
 
         t_obj = self.v.emitter.temp_pool.newTemp("ref")
-        self.v.emitter.emit(Op.NEWOBJ, arg1=class_name, arg2=str(obj_size), res=t_obj)
+        self.v.emitter.emitNewObj(class_name, obj_size, t_obj)
         log(f"\t[TAC][expr] NEWOBJ {class_name} (size={obj_size}) -> {t_obj}", channel="tac")
 
         # Llamada al constructor si existe en la jerarquía
@@ -376,13 +377,13 @@ class TacExpressions:
                     break
 
         if ctor_owner is not None:
-            self.v.emitter.emit(Op.PARAM, arg1=t_obj)
+            self.v.emitter.emitParam(t_obj)
             n_params = 1
             for e in (list(ctx.arguments().expression()) if ctx.arguments() else []):
                 self.v.visit(e)
                 p, is_tmp = deepPlace(e)
                 aplace = p or e.getText()
-                self.v.emitter.emit(Op.PARAM, arg1=aplace)
+                self.v.emitter.emitParam(aplace)
                 if is_tmp:
                     self.v.emitter.temp_pool.free(aplace, "*")
                 n_params += 1

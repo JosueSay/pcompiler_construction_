@@ -162,7 +162,7 @@ class TacLValues:
                 except Exception:
                     t_len = None
 
-                self.v.emitter.emit(Op.INDEX_LOAD, arg1=base_place, arg2=idx_place, res=t_val)
+                self.v.emitter.emitIndexLoad(t_val, base_place, idx_place)
 
                 if t_len:
                     self.v.emitter.temp_pool.free(t_len, "*")
@@ -222,14 +222,14 @@ class TacLValues:
                 recv_place = getattr(base_type, "_recv_place", None)
                 recv_is_temp = bool(getattr(base_type, "_recv_is_temp", False))
                 if recv_place is not None:
-                    self.v.emitter.emit(Op.PARAM, arg1=recv_place)
+                    self.v.emitter.emitParam(recv_place)
                     n_params += 1
 
                 # Args explícitos
                 for e in args_nodes:
                     p, is_tmp = deepPlace(e)
                     aplace = p or e.getText()
-                    self.v.emitter.emit(Op.PARAM, arg1=aplace)
+                    self.v.emitter.emitParam(aplace)
                     if is_tmp:
                         self.v.emitter.temp_pool.free(aplace, "*")
                     n_params += 1

@@ -1,4 +1,3 @@
-from antlr4.tree.Tree import TerminalNode
 from antlr_gen.CompiscriptParser import CompiscriptParser
 from logs.logger import log, logFunction
 from utils.ast_utils import deepPlace, isAssignText
@@ -171,7 +170,7 @@ class TacStatements:
                     rhs_place = p_rhs or rhs_node.getText()
 
                     t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, base_name)
-                    self.v.emitter.emit(Op.INDEX_STORE, arg1=base_name, res=rhs_place, label=idx_place)
+                    self.v.emitter.emitIndexStore(base_name, idx_place, rhs_place)
                     if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
                     if it_rhs: self.v.emitter.temp_pool.free(rhs_place, "*")
                     if t_len: self.v.emitter.temp_pool.free(t_len, "*")
@@ -220,7 +219,7 @@ class TacStatements:
                     rhs_place = p_rhs or rhs_node.getText()
 
                     t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, curr_place)
-                    self.v.emitter.emit(Op.INDEX_STORE, arg1=curr_place, res=rhs_place, label=idx_place)
+                    self.v.emitter.emitIndexStore(curr_place, idx_place, rhs_place)
 
                     if t_len: self.v.emitter.temp_pool.free(t_len, "*")
                     if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
@@ -302,7 +301,7 @@ class TacStatements:
                 dst_place = name
 
             log(f"\t[TAC][VAR] {name} -> {dst_place} = {rhs_place}", channel="tac")
-            self.v.emitter.emit(Op.ASSIGN, arg1=rhs_place, res=dst_place)
+            self.v.emitter.emitAssign(dst_place, rhs_place)
 
             # liberar RHS si fue temporal
             if it:
@@ -327,7 +326,7 @@ class TacStatements:
             p, it = deepPlace(expr_ctx)
             rhs_place = p or expr_ctx.getText()
             log(f"\t[TacStatements][visitConstantDeclaration] initializer: {rhs_place}", channel="tac")
-            self.v.emitter.emit(Op.ASSIGN, arg1=rhs_place, res=name)
+            self.v.emitter.emitAssign(name, rhs_place)
 
             # liberar RHS si fue temporal
             if it:
@@ -370,7 +369,7 @@ class TacStatements:
                 rhs_place = p_rhs or rhs_node.getText()
 
                 t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, base_name)
-                self.v.emitter.emit(Op.INDEX_STORE, arg1=base_name, res=rhs_place, label=idx_place)
+                self.v.emitter.emitIndexStore(base_name, idx_place, rhs_place)
                 if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
                 if it_rhs: self.v.emitter.temp_pool.free(rhs_place, "*")
                 if t_len: self.v.emitter.temp_pool.free(t_len, "*")
@@ -402,7 +401,7 @@ class TacStatements:
                         dst_place = name
 
                     log(f"\t[TAC][ASSIGN] {name} -> {dst_place} = {rhs_place}", channel="tac")
-                    self.v.emitter.emit(Op.ASSIGN, arg1=rhs_place, res=dst_place)
+                    self.v.emitter.emitAssign(dst_place, rhs_place)
                     if it: self.v.emitter.temp_pool.free(rhs_place, "*")
                     self.v.emitter.temp_pool.resetPerStatement()
                     log(f"\t[TacStatements][visitAssignment] simple assign: {name} = {rhs_place}", channel="tac")
@@ -424,7 +423,7 @@ class TacStatements:
                 dst_place = name
 
             log(f"\t[TAC][ASSIGN] {name} -> {dst_place} = {rhs_place}", channel="tac")
-            self.v.emitter.emit(Op.ASSIGN, arg1=rhs_place, res=dst_place)
+            self.v.emitter.emitAssign(dst_place, rhs_place)
             if it: self.v.emitter.temp_pool.free(rhs_place, "*")
             self.v.emitter.temp_pool.resetPerStatement()
             log(f"\t[TacStatements][visitAssignment] variable assign: {name} = {rhs_place}", channel="tac")
@@ -448,7 +447,7 @@ class TacStatements:
                 rhs_place = p_rhs or rhs_node.getText()
 
                 t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, base_name)
-                self.v.emitter.emit(Op.INDEX_STORE, arg1=base_name, res=rhs_place, label=idx_place)
+                self.v.emitter.emitIndexStore(base_name, idx_place, rhs_place)
                 if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
                 if it_rhs: self.v.emitter.temp_pool.free(rhs_place, "*")
                 if t_len: self.v.emitter.temp_pool.free(t_len, "*")

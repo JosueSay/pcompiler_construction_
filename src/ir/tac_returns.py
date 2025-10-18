@@ -53,9 +53,9 @@ class TacReturns:
             log(f"\t[TAC] RETURN {pretty_val}", channel="tac")
 
             if value is None:
-                self.v.emitter.emit(Op.RETURN)
+                self.v.emitter.emitReturn()
             else:
-                self.v.emitter.emit(Op.RETURN, arg1=value)
+                self.v.emitter.emitReturn(value)
 
             if hasattr(self.v.emitter, "markFlowTerminated"):
                 self.v.emitter.markFlowTerminated()

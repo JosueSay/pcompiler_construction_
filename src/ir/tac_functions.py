@@ -127,7 +127,7 @@ class TacFunctions:
                 log(f"\t[TAC][FUNC] Implicit endFunction (sin return) en función void '{name}'", channel="tac")
             else:
                 
-                self.v.emitter.emit(Op.RETURN, arg1="None")
+                self.v.emitter.emitReturn("None")
                 self.v.emitter.endFunction()
                 log(f"\t[TAC][WARN] Función '{name}' no-void sin 'return'; emitiendo RETURN None.", channel="tac")
         else:
