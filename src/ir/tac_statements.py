@@ -14,17 +14,87 @@ class TacStatements:
         self.v = v
 
     # ---------- helpers AST ----------
+    def suffixSeqAndPropsFromText(self, lhs_ctx):
+        """
+        A partir del texto del LHS, devuelve:
+        - seq: lista con elementos en {'Index','Prop','Call'} en el orden en que aparecen
+        - base_txt: texto base antes del primer sufijo (id o 'this')
+        - prop_chain: lista de nombres de propiedades en orden (después de '.')
+        No depende de la estructura concreta del árbol para clasificar.
+        """
+        try:
+            lhs_txt = lhs_ctx.getText()
+        except Exception:
+            return [], "", []
+
+        seq = []
+        prop_chain = []
+        n = len(lhs_txt)
+        i = 0
+
+        # leer base (hasta '.', '[' o '(')
+        base_chars = []
+        while i < n and lhs_txt[i] not in ".[(":
+            base_chars.append(lhs_txt[i])
+            i += 1
+        base_txt = "".join(base_chars)
+
+        def skipBracket(i):
+            # salta hasta ']' correspondiente (sin anidación en nuestro lenguaje)
+            i += 1  # saltar '['
+            while i < n and lhs_txt[i] != ']':
+                i += 1
+            return i + 1 if i < n else i
+
+        def skipParens(i):
+            # salta hasta ')' correspondiente (sin anidación en nuestro lenguaje)
+            i += 1  # saltar '('
+            while i < n and lhs_txt[i] != ')':
+                i += 1
+            return i + 1 if i < n else i
+
+        def readIdent(i):
+            # lee un identificador tras un '.'
+            j = i
+            while j < n and lhs_txt[j] not in ".[()":
+                j += 1
+            return lhs_txt[i:j], j
+
+        # recorrer sufijos
+        while i < n:
+            c = lhs_txt[i]
+            if c == '[':
+                seq.append("Index")
+                i = skipBracket(i)
+            elif c == '.':
+                seq.append("Prop")
+                i += 1  # saltar '.'
+                ident, i = readIdent(i)
+                if ident:
+                    prop_chain.append(ident)
+            elif c == '(':
+                seq.append("Call")
+                i = skipParens(i)
+            else:
+                # caracter inesperado: avanzar 1 para no quedar en bucle
+                i += 1
+
+        return seq, base_txt, prop_chain
+    
+    
     def resolveFieldOffset(self, owner: str, field: str):
         try:
             return self.v.lvalues.resolveFieldOffset(owner, field)
         except Exception:
             return None
 
+
     def symType(self, name: str):
         try:
             return self.v.lvalues.symType(name)
         except Exception:
             return None
+
 
     def resolveAttrType(self, owner: str, field: str):
         try:
@@ -35,7 +105,7 @@ class TacStatements:
             pass
         return None
 
-    
+
     def findDesc(self, node, klass):
         log(f"\t[TacStatements][findDesc] enter node={node}, looking for {klass}", channel="tac")
         try:
@@ -49,6 +119,7 @@ class TacStatements:
         except Exception:
             return None
         return None
+
 
     def expressionsFromCTX(self, ctx):
         exprs = []
@@ -72,6 +143,7 @@ class TacStatements:
         log(f"\t[TacStatements][expressionsFromCTX] found {len(exprs)} expressions in {ctx.getText()}", channel="tac")
         return exprs
 
+
     def rhsOfAssignExpr(self, expr_ctx):
         rhs = None
         try:
@@ -89,45 +161,105 @@ class TacStatements:
         log(f"\t[TacStatements][rhsOfAssignExpr] rhs for {expr_ctx.getText()} -> {rhs}", channel="tac")
         return rhs
 
+
     def matchSimpleIndexAssign(self, lhs_or_expr_node):
         res = None
         lhs_ctx = self.findDesc(lhs_or_expr_node, CompiscriptParser.LeftHandSideContext)
-        if lhs_ctx:
-            try:
-                lhs_txt = lhs_ctx.getText()
-                brk = lhs_txt.find('[')
-                if brk > 0:
-                    base_txt = lhs_txt[:brk]
-                    if base_txt not in ('this',) and '.' not in base_txt:
-                        idx_node = self.findDesc(lhs_ctx, CompiscriptParser.IndexExprContext)
-                        if idx_node:
-                            res = (base_txt, idx_node)
-            except Exception:
-                res = None
-        log(f"\t[TacStatements][matchSimpleIndexAssign] {lhs_or_expr_node.getText()} -> {res}", channel="tac")
+        if lhs_ctx is None:
+            log("\t[TacStatements][matchSimpleIndexAssign] no lhs_ctx", channel="tac")
+            return None
+
+        seq, base_txt, _props = self.suffixSeqAndPropsFromText(lhs_ctx)
+        num_suffix = len(seq)
+        log(f"\t[TacStatements][matchSimpleIndexAssign][TRACE] base='{base_txt}', num_suffix={num_suffix}, seq={seq}", channel="tac")
+
+        # Reglas estrictas para "simple index":
+        if not base_txt or base_txt == 'this' or '.' in base_txt:
+            log("\t[TacStatements][matchSimpleIndexAssign] base inválida o no-simple", channel="tac")
+            return None
+        if num_suffix != 1 or seq != ["Index"]:
+            log("\t[TacStatements][matchSimpleIndexAssign] Rechazado: requiere exactamente 1 suffix (Index)", channel="tac")
+            return None
+
+        idx_node = self.findDesc(lhs_ctx, CompiscriptParser.IndexExprContext)
+        if idx_node is None:
+            log("\t[TacStatements][matchSimpleIndexAssign] no IndexExprContext encontrado", channel="tac")
+            return None
+
+        res = (base_txt, idx_node)
+        log(f"\t[TacStatements][matchSimpleIndexAssign] OK -> {res}", channel="tac")
         return res
 
-    def matchPropertyIndexAssign(self, lhs_or_expr_node):
-        res = None
-        lhs_ctx = self.findDesc(lhs_or_expr_node, CompiscriptParser.LeftHandSideContext)
-        if lhs_ctx:
+
+    def buildSuffixPlan(self, lhs_ctx):
+        """
+        Devuelve un plan general de navegación a partir del LHS.
+        plan: lista de pasos [('Index', idx_ctx), ('Prop', 'b'), ('Index', idx_ctx), ...] en orden.
+        base_txt: identificador base o 'this'.
+        """
+        seq, base_txt, prop_chain = self.suffixSeqAndPropsFromText(lhs_ctx)
+
+        # Recolectar todos los contextos reales en el mismo orden en que aparecen
+        def collectInOrder(node, acc):
             try:
-                lhs_txt = lhs_ctx.getText()
-                brk = lhs_txt.find('[')
-                if brk > 0:
-                    base_txt = lhs_txt[:brk]
-                    if '.' in base_txt:
-                        parts = base_txt.split('.')
-                        if len(parts) >= 2:
-                            obj_txt = parts[0]
-                            prop_chain = parts[1:]
-                            idx_node = self.findDesc(lhs_ctx, CompiscriptParser.IndexExprContext)
-                            if idx_node:
-                                res = (obj_txt, prop_chain, idx_node)
+                for ch in node.getChildren():
+                    if isinstance(ch, CompiscriptParser.IndexExprContext):
+                        acc.append(("Index", ch))
+                    elif isinstance(ch, CompiscriptParser.PropertyAccessExprContext):
+                        # De PropertyAccessExprContext tomamos el texto ".name"
+                        try:
+                            txt = ch.getText()
+                            # quitar el punto inicial
+                            name = txt[1:] if txt.startswith('.') else txt
+                        except Exception:
+                            name = "<prop>"
+                        acc.append(("Prop", name))
+                    else:
+                        collectInOrder(ch, acc)
             except Exception:
-                res = None
-        log(f"\t[TacStatements][matchPropertyIndexAssign] {lhs_or_expr_node.getText()} -> {res}", channel="tac")
-        return res
+                return
+
+        raw_plan = []
+        collectInOrder(lhs_ctx, raw_plan)
+
+        # Si no logramos detectar Props por los contextos, caemos al prop_chain extraído del texto
+        if not any(kind == "Prop" for kind, _ in raw_plan) and prop_chain:
+            # Insertar props en su orden textual entre índices cuando corresponda
+            plan = []
+            pi = 0
+            for kind, payload in raw_plan:
+                plan.append((kind, payload))
+                if kind == "Index" and pi < len(prop_chain):
+                    plan.append(("Prop", prop_chain[pi]))
+                    pi += 1
+            while pi < len(prop_chain):
+                plan.append(("Prop", prop_chain[pi]))
+                pi += 1
+        else:
+            plan = raw_plan
+
+        return base_txt, plan
+
+
+    def matchPropertyIndexAssign(self, lhs_or_expr_node):
+        lhs_ctx = self.findDesc(lhs_or_expr_node, CompiscriptParser.LeftHandSideContext)
+        if lhs_ctx is None:
+            log("\t[TacStatements][matchPropertyIndexAssign] no lhs_ctx", channel="tac")
+            return None
+
+        seq_txt, base_txt, prop_chain_txt = self.suffixSeqAndPropsFromText(lhs_ctx)
+        log(f"\t[TacStatements][matchPropertyIndexAssign][TRACE] num_suffix={len(seq_txt)}, seq={seq_txt}", channel="tac")
+
+        base_txt, plan = self.buildSuffixPlan(lhs_ctx)
+
+        # Debe haber al menos un Prop o un Index en total para que tenga sentido como acceso compuesto
+        if not plan or all(kind not in ("Prop", "Index") for kind, _ in plan):
+            log("\t[TacStatements][matchPropertyIndexAssign] Rechazado: sin pasos Prop/Index", channel="tac")
+            return None
+
+        # Aceptamos base simple o 'this'; la generalización cubre casos profundos
+        log(f"\t[TacStatements][matchPropertyIndexAssign] OK: base={base_txt}, plan={[(k, (p.getText() if hasattr(p,'getText') else p)) for k,p in plan]}", channel="tac")
+        return (base_txt, plan)
 
 
     def visitExpressionStatement(self, ctx):
@@ -153,14 +285,97 @@ class TacStatements:
         if is_assign:
             log(f"\t[TacStatements][visitExpressionStatement] detected assignment expression: {txt}", channel="tac")
 
-            # Asignación simple a[i] = rhs
+            # 1) Asignación con propiedad obj.prop[i] = rhs
+            mp = self.matchPropertyIndexAssign(expr)
+            if mp is not None:
+                base_txt, plan = mp
+                rhs_node = self.rhsOfAssignExpr(expr)
+                if rhs_node is not None:
+                    curr_place = 'this' if base_txt == 'this' else base_txt
+                    temp_to_free = None
+                    owner_name = getattr(self.symType(base_txt), "name", None)
+
+                    # visitar RHS una sola vez (lo usaremos al final)
+                    self.v.visit(rhs_node)
+                    p_rhs, it_rhs = deepPlace(rhs_node)
+                    rhs_place = p_rhs or rhs_node.getText()
+
+                    # Procesar todos los pasos salvo el último, avanzando curr_place
+                    for i, (kind, payload) in enumerate(plan[:-1]):
+                        if kind == "Index":
+                            idx_expr = payload.expression() if hasattr(payload, "expression") else payload
+                            self.v.visit(idx_expr)
+                            p_idx, it_idx = deepPlace(idx_expr)
+                            idx_place = p_idx or idx_expr.getText()
+
+                            if hasattr(self.v.emitter, "emitIndexLoad"):
+                                t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, curr_place)
+                                t_next = self.v.emitter.temp_pool.newTemp("ref")
+                                self.v.emitter.emitIndexLoad(curr_place, idx_place, t_next)
+                                if t_len: self.v.emitter.temp_pool.free(t_len, "*")
+                                if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
+                            else:
+                                # Fallback: al menos el check
+                                self.v.emitter.emitBoundsCheck(idx_place, curr_place)
+                                t_next = curr_place  # no avanzamos realmente sin emitIndexLoad
+
+                            if temp_to_free and temp_to_free != 'this':
+                                self.v.emitter.temp_pool.free(temp_to_free, "*")
+                            temp_to_free = t_next
+                            curr_place = t_next
+
+                        elif kind == "Prop":
+                            prop_name = payload
+                            t_next = self.v.emitter.temp_pool.newTemp("*")
+                            off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
+                            label_for_emit = off if isinstance(off, int) else prop_name
+                            self.v.emitter.emitFieldLoad(curr_place, label_for_emit, t_next)
+
+                            # actualizar owner_name para siguientes hops
+                            if owner_name:
+                                next_t = self.resolveAttrType(owner_name, prop_name)
+                                owner_name = getattr(next_t, "name", None)
+
+                            if temp_to_free and temp_to_free != 'this':
+                                self.v.emitter.temp_pool.free(temp_to_free, "*")
+                            temp_to_free = t_next
+                            curr_place = t_next
+
+                    # Paso final: decide STORE por Index o por Prop
+                    last_kind, last_payload = plan[-1]
+                    if last_kind == "Index":
+                        idx_expr = last_payload.expression() if hasattr(last_payload, "expression") else last_payload
+                        self.v.visit(idx_expr)
+                        p_idx, it_idx = deepPlace(idx_expr)
+                        idx_place = p_idx or idx_expr.getText()
+
+                        t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, curr_place)
+                        self.v.emitter.emitIndexStore(curr_place, idx_place, rhs_place)
+                        if t_len: self.v.emitter.temp_pool.free(t_len, "*")
+                        if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
+
+                    elif last_kind == "Prop":
+                        prop_name = last_payload
+                        off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
+                        label_for_emit = off if isinstance(off, int) else prop_name
+                        self.v.emitter.emitFieldStore(curr_place, label_for_emit, rhs_place)
+
+                    # liberar temporales
+                    if it_rhs: self.v.emitter.temp_pool.free(rhs_place, "*")
+                    if temp_to_free and temp_to_free != 'this': self.v.emitter.temp_pool.free(temp_to_free, "*")
+
+                    self.v.emitter.temp_pool.resetPerStatement()
+                    return None
+
+
+
+            # 2) Luego: Asignación simple a[i] = rhs
             m = self.matchSimpleIndexAssign(expr)
             if m is not None:
                 log(f"\t[TacStatements][visitExpressionStatement] simple index assign: {m}", channel="tac")
                 base_name, idx_node = m
                 rhs_node = self.rhsOfAssignExpr(expr)
                 if rhs_node is not None:
-                    log(f"\t[TacStatements][visitExpressionStatement] RHS detected: {rhs_node.getText()}", channel="tac")
                     self.v.visit(idx_node.expression() if hasattr(idx_node, "expression") else idx_node)
                     p_idx, it_idx = deepPlace(idx_node if not hasattr(idx_node, "expression") else idx_node.expression())
                     idx_place = p_idx or (idx_node.expression().getText() if hasattr(idx_node, "expression") else idx_node.getText())
@@ -178,58 +393,7 @@ class TacStatements:
                     self.v.emitter.temp_pool.resetPerStatement()
                     return None
 
-            # Asignación con propiedad obj.prop[i] = rhs
-            mp = self.matchPropertyIndexAssign(expr)
-            if mp is not None:
-                log(f"\t[TacStatements][visitExpressionStatement] property index assign: {mp}", channel="tac")
-                obj_txt, prop_chain, idx_node = mp
-                rhs_node = self.rhsOfAssignExpr(expr)
-                if rhs_node is not None:
-                    curr_place = 'this' if obj_txt == 'this' else obj_txt
-                    temp_to_free = None
-                    owner_type = self.symType(obj_txt)
-                    owner_name = getattr(owner_type, "name", None)
-
-                    for prop_name in prop_chain:
-                        t_next = self.v.emitter.temp_pool.newTemp("*")
-
-                        # Resolver offset del campo si conocemos el owner
-                        off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
-                        label_for_emit = off if isinstance(off, int) else prop_name
-
-                        self.v.emitter.emitFieldLoad(curr_place, label_for_emit, t_next)
-
-                        # Avanzar owner_name con el tipo del atributo (para el siguiente salto)
-                        if owner_name:
-                            next_t = self.resolveAttrType(owner_name, prop_name)
-                            owner_name = getattr(next_t, "name", None)
-
-                        if temp_to_free and temp_to_free != 'this':
-                            self.v.emitter.temp_pool.free(temp_to_free, "*")
-                        temp_to_free = t_next
-                        curr_place = t_next
-
-                    idx_expr = idx_node.expression() if hasattr(idx_node, "expression") else idx_node
-                    self.v.visit(idx_expr)
-                    p_idx, it_idx = deepPlace(idx_expr)
-                    idx_place = p_idx or idx_expr.getText()
-
-                    self.v.visit(rhs_node)
-                    p_rhs, it_rhs = deepPlace(rhs_node)
-                    rhs_place = p_rhs or rhs_node.getText()
-
-                    t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, curr_place)
-                    self.v.emitter.emitIndexStore(curr_place, idx_place, rhs_place)
-
-                    if t_len: self.v.emitter.temp_pool.free(t_len, "*")
-                    if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
-                    if it_rhs: self.v.emitter.temp_pool.free(rhs_place, "*")
-                    if temp_to_free and temp_to_free != 'this': self.v.emitter.temp_pool.free(temp_to_free, "*")
-
-                    self.v.emitter.temp_pool.resetPerStatement()
-                    return None
-
-            # Fallback a visitAssignment
+            # 3) Fallback a visitAssignment
             log("\t[TacStatements][visitExpressionStatement] fallback to visitAssignment", channel="tac")
             self.visitAssignment(expr)
             self.v.emitter.temp_pool.resetPerStatement()
@@ -240,9 +404,11 @@ class TacStatements:
         self.v.emitter.temp_pool.resetPerStatement()
         return None
 
+
     # ----------------------------------
     # Bloques (barrera de flujo)
     # ----------------------------------
+
 
     def visitBlock(self, ctx):
         log(f"\t[TacStatements][visitBlock] enter block with {len(ctx.statement())} statements", channel="tac")
@@ -278,6 +444,7 @@ class TacStatements:
     # Declaraciones (solo inicializador)
     # ----------------------------------
 
+
     def visitVariableDeclaration(self, ctx):
         name = ctx.Identifier().getText()
         log(f"\t[TacStatements][visitVariableDeclaration] enter: {name}", channel="tac")
@@ -312,7 +479,6 @@ class TacStatements:
         return None
 
 
-    
     def visitConstantDeclaration(self, ctx):
         name = ctx.Identifier().getText() if ctx.Identifier() else "<unnamed-const>"
         log(f"\t[TacStatements][visitConstantDeclaration] enter: {name}", channel="tac")
@@ -336,11 +502,11 @@ class TacStatements:
         log(f"\t[TacStatements][visitConstantDeclaration] exit: {name}", channel="tac")
         return None
 
+
     # ----------------------------------
     # Asignaciones
     # ----------------------------------
 
-    
     def visitAssignment(self, ctx):
         if getattr(self.v.emitter, "flow_terminated", False):
             log("\t[TacStatements][visitAssignment] flow terminated, skipping", channel="tac")
@@ -352,7 +518,89 @@ class TacStatements:
         n = len(exprs)
 
         if is_expr_ctx and n == 2:
-            # v[i] = expr
+            # 1) obj.prop[...] = expr
+            mp = self.matchPropertyIndexAssign(exprs[0])
+            if mp is not None:
+                base_txt, plan = mp
+                rhs_node = exprs[1]
+
+                curr_place = 'this' if base_txt == 'this' else base_txt
+                temp_to_free = None
+                owner_name = getattr(self.symType(base_txt), "name", None)
+
+                # Pre-evaluar RHS
+                self.v.visit(rhs_node)
+                p_rhs, it_rhs = deepPlace(rhs_node)
+                rhs_place = p_rhs or rhs_node.getText()
+
+                # Avanzar por todos los pasos salvo el último
+                for i, (kind, payload) in enumerate(plan[:-1]):
+                    if kind == "Index":
+                        idx_expr = payload.expression() if hasattr(payload, "expression") else payload
+                        self.v.visit(idx_expr)
+                        p_idx, it_idx = deepPlace(idx_expr)
+                        idx_place = p_idx or idx_expr.getText()
+
+                        if hasattr(self.v.emitter, "emitIndexLoad"):
+                            t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, curr_place)
+                            t_next = self.v.emitter.temp_pool.newTemp("ref")
+                            self.v.emitter.emitIndexLoad(curr_place, idx_place, t_next)
+                            if t_len: self.v.emitter.temp_pool.free(t_len, "*")
+                            if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
+                        else:
+                            self.v.emitter.emitBoundsCheck(idx_place, curr_place)
+                            t_next = curr_place
+
+                        if temp_to_free and temp_to_free != 'this':
+                            self.v.emitter.temp_pool.free(temp_to_free, "*")
+                        temp_to_free = t_next
+                        curr_place = t_next
+
+                    elif kind == "Prop":
+                        prop_name = payload
+                        t_next = self.v.emitter.temp_pool.newTemp("*")
+                        off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
+                        label_for_emit = off if isinstance(off, int) else prop_name
+                        self.v.emitter.emitFieldLoad(curr_place, label_for_emit, t_next)
+
+                        if owner_name:
+                            next_t = self.resolveAttrType(owner_name, prop_name)
+                            owner_name = getattr(next_t, "name", None)
+
+                        if temp_to_free and temp_to_free != 'this':
+                            self.v.emitter.temp_pool.free(temp_to_free, "*")
+                        temp_to_free = t_next
+                        curr_place = t_next
+
+                # Paso final: STORE por Index o por Prop
+                last_kind, last_payload = plan[-1]
+                if last_kind == "Index":
+                    idx_expr = last_payload.expression() if hasattr(last_payload, "expression") else last_payload
+                    self.v.visit(idx_expr)
+                    p_idx, it_idx = deepPlace(idx_expr)
+                    idx_place = p_idx or idx_expr.getText()
+
+                    t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, curr_place)
+                    self.v.emitter.emitIndexStore(curr_place, idx_place, rhs_place)
+                    if t_len: self.v.emitter.temp_pool.free(t_len, "*")
+                    if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
+
+                elif last_kind == "Prop":
+                    prop_name = last_payload
+                    off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
+                    label_for_emit = off if isinstance(off, int) else prop_name
+                    self.v.emitter.emitFieldStore(curr_place, label_for_emit, rhs_place)
+
+                if it_rhs: self.v.emitter.temp_pool.free(rhs_place, "*")
+                if temp_to_free and temp_to_free != 'this': self.v.emitter.temp_pool.free(temp_to_free, "*")
+
+                self.v.emitter.temp_pool.resetPerStatement()
+                log(f"\t[TacStatements][visitAssignment] property index assign complete (general)", channel="tac")
+                return None
+
+          
+            
+            # 2. v[i] = expr
             m = self.matchSimpleIndexAssign(exprs[0])
             if m is not None:
                 log(f"\t[TacStatements][visitAssignment] simple index assign detected: {m}", channel="tac")
@@ -377,7 +625,7 @@ class TacStatements:
                 log(f"\t[TacStatements][visitAssignment] simple index assign complete: {base_name}[{idx_place}] = {rhs_place}", channel="tac")
                 return None
 
-            # id = expr
+            # 3. id = expr
             lhs_ctx = self.findDesc(exprs[0], CompiscriptParser.LeftHandSideContext)
             if lhs_ctx is not None:
                 name = None
@@ -431,6 +679,88 @@ class TacStatements:
 
         # (index) v[i] = expr
         if n == 2:
+            # 1) property-index
+            mp = self.matchPropertyIndexAssign(exprs[0])
+            if mp is not None:
+                log(f"\t[TacStatements][visitAssignment] property index assign (general): {mp}", channel="tac")
+                base_txt, plan = mp
+                rhs_node = exprs[1]
+
+                curr_place = 'this' if base_txt == 'this' else base_txt
+                temp_to_free = None
+                owner_name = getattr(self.symType(base_txt), "name", None)
+
+                # Pre-evaluar RHS
+                self.v.visit(rhs_node)
+                p_rhs, it_rhs = deepPlace(rhs_node)
+                rhs_place = p_rhs or rhs_node.getText()
+
+                # Avanzar por todos los pasos salvo el último
+                for i, (kind, payload) in enumerate(plan[:-1]):
+                    if kind == "Index":
+                        idx_expr = payload.expression() if hasattr(payload, "expression") else payload
+                        self.v.visit(idx_expr)
+                        p_idx, it_idx = deepPlace(idx_expr)
+                        idx_place = p_idx or idx_expr.getText()
+
+                        if hasattr(self.v.emitter, "emitIndexLoad"):
+                            t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, curr_place)
+                            t_next = self.v.emitter.temp_pool.newTemp("ref")
+                            self.v.emitter.emitIndexLoad(curr_place, idx_place, t_next)
+                            if t_len: self.v.emitter.temp_pool.free(t_len, "*")
+                            if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
+                        else:
+                            self.v.emitter.emitBoundsCheck(idx_place, curr_place)
+                            t_next = curr_place
+
+                        if temp_to_free and temp_to_free != 'this':
+                            self.v.emitter.temp_pool.free(temp_to_free, "*")
+                        temp_to_free = t_next
+                        curr_place = t_next
+
+                    elif kind == "Prop":
+                        prop_name = payload
+                        t_next = self.v.emitter.temp_pool.newTemp("*")
+                        off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
+                        label_for_emit = off if isinstance(off, int) else prop_name
+                        self.v.emitter.emitFieldLoad(curr_place, label_for_emit, t_next)
+
+                        if owner_name:
+                            next_t = self.resolveAttrType(owner_name, prop_name)
+                            owner_name = getattr(next_t, "name", None)
+
+                        if temp_to_free and temp_to_free != 'this':
+                            self.v.emitter.temp_pool.free(temp_to_free, "*")
+                        temp_to_free = t_next
+                        curr_place = t_next
+
+                # STORE por Index o por Prop
+                last_kind, last_payload = plan[-1]
+                if last_kind == "Index":
+                    idx_expr = last_payload.expression() if hasattr(last_payload, "expression") else last_payload
+                    self.v.visit(idx_expr)
+                    p_idx, it_idx = deepPlace(idx_expr)
+                    idx_place = p_idx or idx_expr.getText()
+
+                    t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, curr_place)
+                    self.v.emitter.emitIndexStore(curr_place, idx_place, rhs_place)
+                    if t_len: self.v.emitter.temp_pool.free(t_len, "*")
+                    if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
+
+                elif last_kind == "Prop":
+                    prop_name = last_payload
+                    off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
+                    label_for_emit = off if isinstance(off, int) else prop_name
+                    self.v.emitter.emitFieldStore(curr_place, label_for_emit, rhs_place)
+
+                if it_rhs: self.v.emitter.temp_pool.free(rhs_place, "*")
+                if temp_to_free and temp_to_free != 'this': self.v.emitter.temp_pool.free(temp_to_free, "*")
+
+                self.v.emitter.temp_pool.resetPerStatement()
+                log(f"\t[TacStatements][visitAssignment] property index assign complete (general)", channel="tac")
+                return None
+
+            
             m = self.matchSimpleIndexAssign(exprs[0])
             if m is not None:
                 log(f"\t[TacStatements][visitAssignment] index assign: {m}", channel="tac")
@@ -540,7 +870,6 @@ class TacStatements:
     # foreach (sin emisión específica)
     # ----------------------------------
 
-    
     def visitForeachStatement(self, ctx):
         log("\t[TacStatements][visitForeachStatement] enter", channel="tac")
         self.v.visit(ctx.block())
