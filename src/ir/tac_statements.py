@@ -1,9 +1,9 @@
 from antlr_gen.CompiscriptParser import CompiscriptParser
-from logs.logger import log, logFunction
+from logs.logger import log
 from utils.ast_utils import deepPlace, isAssignText
 from ir.tac import Op
 from ir.addr_format import place_of_symbol
-from semantic.custom_types import ClassType
+from semantic.custom_types import ClassType, ArrayType
 
 
 class TacStatements:
@@ -293,7 +293,7 @@ class TacStatements:
                 if rhs_node is not None:
                     curr_place = 'this' if base_txt == 'this' else base_txt
                     temp_to_free = None
-                    owner_name = getattr(self.symType(base_txt), "name", None)
+                    owner_type = self.symType(base_txt) 
 
                     # visitar RHS una sola vez (lo usaremos al final)
                     self.v.visit(rhs_node)
@@ -303,6 +303,9 @@ class TacStatements:
                     # Procesar todos los pasos salvo el último, avanzando curr_place
                     for i, (kind, payload) in enumerate(plan[:-1]):
                         if kind == "Index":
+                            if hasattr(owner_type, "elem_type"):
+                                # típico ArrayType(elem_type=...)
+                                owner_type = owner_type.elem_type or owner_type
                             idx_expr = payload.expression() if hasattr(payload, "expression") else payload
                             self.v.visit(idx_expr)
                             p_idx, it_idx = deepPlace(idx_expr)
@@ -311,7 +314,7 @@ class TacStatements:
                             if hasattr(self.v.emitter, "emitIndexLoad"):
                                 t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, curr_place)
                                 t_next = self.v.emitter.temp_pool.newTemp("ref")
-                                self.v.emitter.emitIndexLoad(curr_place, idx_place, t_next)
+                                self.v.emitter.emitIndexLoad(t_next, curr_place, idx_place)
                                 if t_len: self.v.emitter.temp_pool.free(t_len, "*")
                                 if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
                             else:
@@ -327,14 +330,16 @@ class TacStatements:
                         elif kind == "Prop":
                             prop_name = payload
                             t_next = self.v.emitter.temp_pool.newTemp("*")
+
+                            owner_name = owner_type.name if isinstance(owner_type, ClassType) else None
                             off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
                             label_for_emit = off if isinstance(off, int) else prop_name
                             self.v.emitter.emitFieldLoad(curr_place, label_for_emit, t_next)
 
-                            # actualizar owner_name para siguientes hops
-                            if owner_name:
-                                next_t = self.resolveAttrType(owner_name, prop_name)
-                                owner_name = getattr(next_t, "name", None)
+                            # actualizar owner_type para siguientes hops (propagación tras Prop)
+                            if isinstance(owner_type, ClassType):
+                                next_t = self.resolveAttrType(owner_type.name, prop_name)
+                                owner_type = next_t or owner_type
 
                             if temp_to_free and temp_to_free != 'this':
                                 self.v.emitter.temp_pool.free(temp_to_free, "*")
@@ -356,6 +361,7 @@ class TacStatements:
 
                     elif last_kind == "Prop":
                         prop_name = last_payload
+                        owner_name = owner_type.name if isinstance(owner_type, ClassType) else None
                         off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
                         label_for_emit = off if isinstance(off, int) else prop_name
                         self.v.emitter.emitFieldStore(curr_place, label_for_emit, rhs_place)
@@ -526,7 +532,7 @@ class TacStatements:
 
                 curr_place = 'this' if base_txt == 'this' else base_txt
                 temp_to_free = None
-                owner_name = getattr(self.symType(base_txt), "name", None)
+                owner_type = self.symType(base_txt)
 
                 # Pre-evaluar RHS
                 self.v.visit(rhs_node)
@@ -536,6 +542,8 @@ class TacStatements:
                 # Avanzar por todos los pasos salvo el último
                 for i, (kind, payload) in enumerate(plan[:-1]):
                     if kind == "Index":
+                        if hasattr(owner_type, "elem_type"):
+                            owner_type = owner_type.elem_type or owner_type
                         idx_expr = payload.expression() if hasattr(payload, "expression") else payload
                         self.v.visit(idx_expr)
                         p_idx, it_idx = deepPlace(idx_expr)
@@ -544,7 +552,7 @@ class TacStatements:
                         if hasattr(self.v.emitter, "emitIndexLoad"):
                             t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, curr_place)
                             t_next = self.v.emitter.temp_pool.newTemp("ref")
-                            self.v.emitter.emitIndexLoad(curr_place, idx_place, t_next)
+                            self.v.emitter.emitIndexLoad(t_next, curr_place, idx_place)
                             if t_len: self.v.emitter.temp_pool.free(t_len, "*")
                             if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
                         else:
@@ -559,13 +567,16 @@ class TacStatements:
                     elif kind == "Prop":
                         prop_name = payload
                         t_next = self.v.emitter.temp_pool.newTemp("*")
+
+                        owner_name = owner_type.name if isinstance(owner_type, ClassType) else None
                         off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
                         label_for_emit = off if isinstance(off, int) else prop_name
                         self.v.emitter.emitFieldLoad(curr_place, label_for_emit, t_next)
 
-                        if owner_name:
-                            next_t = self.resolveAttrType(owner_name, prop_name)
-                            owner_name = getattr(next_t, "name", None)
+                        # Propagación de tipo tras Prop
+                        if isinstance(owner_type, ClassType):
+                            next_t = self.resolveAttrType(owner_type.name, prop_name)
+                            owner_type = next_t or owner_type
 
                         if temp_to_free and temp_to_free != 'this':
                             self.v.emitter.temp_pool.free(temp_to_free, "*")
@@ -587,6 +598,7 @@ class TacStatements:
 
                 elif last_kind == "Prop":
                     prop_name = last_payload
+                    owner_name = owner_type.name if isinstance(owner_type, ClassType) else None
                     off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
                     label_for_emit = off if isinstance(off, int) else prop_name
                     self.v.emitter.emitFieldStore(curr_place, label_for_emit, rhs_place)
@@ -688,7 +700,7 @@ class TacStatements:
 
                 curr_place = 'this' if base_txt == 'this' else base_txt
                 temp_to_free = None
-                owner_name = getattr(self.symType(base_txt), "name", None)
+                owner_type = self.symType(base_txt)
 
                 # Pre-evaluar RHS
                 self.v.visit(rhs_node)
@@ -698,6 +710,8 @@ class TacStatements:
                 # Avanzar por todos los pasos salvo el último
                 for i, (kind, payload) in enumerate(plan[:-1]):
                     if kind == "Index":
+                        if hasattr(owner_type, "elem_type"):
+                            owner_type = owner_type.elem_type or owner_type
                         idx_expr = payload.expression() if hasattr(payload, "expression") else payload
                         self.v.visit(idx_expr)
                         p_idx, it_idx = deepPlace(idx_expr)
@@ -706,7 +720,7 @@ class TacStatements:
                         if hasattr(self.v.emitter, "emitIndexLoad"):
                             t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, curr_place)
                             t_next = self.v.emitter.temp_pool.newTemp("ref")
-                            self.v.emitter.emitIndexLoad(curr_place, idx_place, t_next)
+                            self.v.emitter.emitIndexLoad(t_next, curr_place, idx_place)
                             if t_len: self.v.emitter.temp_pool.free(t_len, "*")
                             if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
                         else:
@@ -721,13 +735,16 @@ class TacStatements:
                     elif kind == "Prop":
                         prop_name = payload
                         t_next = self.v.emitter.temp_pool.newTemp("*")
+
+                        owner_name = owner_type.name if isinstance(owner_type, ClassType) else None
                         off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
                         label_for_emit = off if isinstance(off, int) else prop_name
                         self.v.emitter.emitFieldLoad(curr_place, label_for_emit, t_next)
 
-                        if owner_name:
-                            next_t = self.resolveAttrType(owner_name, prop_name)
-                            owner_name = getattr(next_t, "name", None)
+                        # Propagación tras Prop
+                        if isinstance(owner_type, ClassType):
+                            next_t = self.resolveAttrType(owner_type.name, prop_name)
+                            owner_type = next_t or owner_type
 
                         if temp_to_free and temp_to_free != 'this':
                             self.v.emitter.temp_pool.free(temp_to_free, "*")
@@ -749,6 +766,7 @@ class TacStatements:
 
                 elif last_kind == "Prop":
                     prop_name = last_payload
+                    owner_name = owner_type.name if isinstance(owner_type, ClassType) else None
                     off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
                     label_for_emit = off if isinstance(off, int) else prop_name
                     self.v.emitter.emitFieldStore(curr_place, label_for_emit, rhs_place)

@@ -73,6 +73,29 @@ class TacLValues:
                 return t
         return None
 
+    def elementTypeFromType(self, t):
+        """Si t es ArrayType, retorna su elem_type; en otro caso, None."""
+        try:
+            if isinstance(t, ArrayType):
+                return t.elem_type
+        except Exception:
+            pass
+        return None
+
+    def inferTypeFromPlace(self, place: str):
+        """
+        Intenta inferir el tipo a partir de un 'place' textual:
+        - 'this' -> ClassType(owner actual) si está disponible.
+        - símbolo en scope -> usa symType.
+        - si nada aplica -> None.
+        """
+        if place == "this":
+            owner = getattr(self.v, "current_method_owner", None)
+            if owner:
+                return ClassType(owner)
+            return None
+        return self.symType(place)
+
     def visitLeftHandSide(self, ctx: CompiscriptParser.LeftHandSideContext):
         log(f"\t[TAC_LVALUES] enter LHS: '{ctx.getText()}'", channel="tac")
 
