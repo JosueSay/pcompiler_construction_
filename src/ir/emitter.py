@@ -6,6 +6,7 @@ from datetime import datetime
 from .tac import Quad, Op
 from .labels import LabelMaker
 from .temp_pool import TempPool
+from logs.logger import log 
 
 
 class Emitter:
@@ -66,10 +67,19 @@ class Emitter:
             return None
         q = Quad(op=op, arg1=arg1, arg2=arg2, res=res, label=label)
         self.quads.append(q)
+
+        if op in (Op.FIELD_LOAD, Op.FIELD_STORE):
+            label_type = type(label).__name__ if label is not None else "None"
+            log(
+                f"[Emitter] {op.name}: arg1={arg1}, arg2={arg2}, res={res}, "
+                f"label={label} (type={label_type})",
+                channel="tac"
+            )
+
         return q
 
     def emitLabel(self, name: str) -> Quad | None:
-        return self.emit(Op.LABEL, res=name)  # type: ignore
+        return self.emit(Op.LABEL, res=name)
 
     def newLabel(self, prefix: str = "L") -> str:
         return self.label_maker.newLabel(prefix)

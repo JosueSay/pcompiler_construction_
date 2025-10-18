@@ -27,6 +27,35 @@ class TacLValues:
         log("↳ [TacLValues] initialized", channel="tac")
         log("=" * 60, channel="tac")
 
+    def resolveFieldOffset(self, owner: str, field: str):
+        """
+        Devuelve el offset numérico del campo si está disponible.
+        Prioriza self.v.class_layout; si no existe, intenta usar class_handler.getFieldOffset.
+        Si falla, retorna None (el caller decidirá cómo degradar).
+        """
+        # 1) Intentar en class_layout (construido por TacGenerator.buildClassLayout)
+        try:
+            layout = getattr(self.v, "class_layout", {}) or {}
+            off = layout.get(owner, {}).get(field)
+            if isinstance(off, int):
+                log(f"\t[TAC_LVALUES][resolveFieldOffset] from layout: owner={owner}, field={field}, offset={off}", channel="tac")
+                return off
+        except Exception:
+            pass
+
+        # 2) Intentar via class_handler (semántica, si lo expone)
+        try:
+            ch = getattr(self.v, "class_handler", None)
+            if ch is not None and hasattr(ch, "getFieldOffset"):
+                off = ch.getFieldOffset(owner, field)
+                if isinstance(off, int):
+                    log(f"\t[TAC_LVALUES][resolveFieldOffset] from class_handler: owner={owner}, field={field}, offset={off}", channel="tac")
+                    return off
+        except Exception:
+            pass
+
+        log(f"\t[TAC_LVALUES][resolveFieldOffset] not found: owner={owner}, field={field}", channel="tac")
+        return None
 
     # --------------------------- util interno ----------------------------
     def symType(self, name: str):
@@ -146,6 +175,11 @@ class TacLValues:
                 base_is_temp = True
                 base_type = elem_t if elem_t is not None else base_type
                 setPlace(suf, base_place, True)
+                # ← anotar tipo en el nodo del sufijo
+                try:
+                    setattr(suf, "_type", base_type)
+                except Exception:
+                    pass
                 continue
 
             # 3.b) Llamadas: f(...), y métodos enlazados
@@ -267,7 +301,11 @@ class TacLValues:
                     self.v.emitter.temp_pool.free(recv_place, "*")
 
                 base_type = ret_t
-                
+                try:
+                    setattr(suf, "_type", base_type)
+                except Exception:
+                    pass
+
                 log(f"\t[TAC_LVALUES] CallExpr result: place={base_place}", channel="tac")
                 continue
 
@@ -282,15 +320,32 @@ class TacLValues:
                     attr_t = self.v.class_handler.getAttributeType(base_type.name, prop_name)
 
                 if attr_t is not None:
+                    
                     t_val = self.v.emitter.temp_pool.newTemp(typeToTempKind(attr_t))
-                    q = self.v.emitter.emit(Op.FIELD_LOAD, arg1=base_place, res=t_val, label=prop_name)
+
+                    owner_name = base_type.name
+                    off = self.resolveFieldOffset(owner_name, prop_name)
+
+                    label_for_emit = off if isinstance(off, int) else prop_name  # fallback seguro
+
+                    log(
+                        f"\t[TAC_LVALUES] FIELD_LOAD resolve: owner={owner_name}, field={prop_name}, "
+                        f"offset={off}, using_label={label_for_emit}",
+                        channel="tac"
+                    )
+
+                    q = self.v.emitter.emit(Op.FIELD_LOAD, arg1=base_place, res=t_val, label=label_for_emit)
+
+                    # Guardar metadatos útiles para depuración/backends
                     try:
-                        off = self.v.class_handler.getFieldOffset(base_type.name, prop_name)
-                        if q is not None and off is not None:
-                            setattr(q, "_field_offset", off)
-                            setattr(q, "_field_owner", base_type.name)
+                        if q is not None:
+                            if isinstance(off, int):
+                                setattr(q, "_field_offset", off)
+                            setattr(q, "_field_owner", owner_name)
+                            setattr(q, "_field_name", prop_name)
                     except Exception:
                         pass
+
 
                     if base_is_temp:
                         self.v.emitter.temp_pool.free(base_place, "*")
@@ -299,6 +354,11 @@ class TacLValues:
                     base_is_temp = True
                     base_type = attr_t
                     setPlace(suf, base_place, True)
+                    # ← anotar tipo en el nodo del sufijo (y opcional log)
+                    try:
+                        setattr(suf, "_type", base_type)
+                    except Exception:
+                        pass
                     continue
 
                 # Método (con herencia)
@@ -353,5 +413,9 @@ class TacLValues:
 
         # 4) Place final
         setPlace(ctx, base_place, base_is_temp)
+        try:
+            setattr(ctx, "_type", base_type)
+        except Exception:
+            pass
         log(f"\t[TAC_LVALUES] exit LHS: type={base_type}, place={base_place}", channel="tac")
         return base_type

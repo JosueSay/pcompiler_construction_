@@ -67,9 +67,77 @@ class TacGenerator(CompiscriptVisitor):
         self.tmethods = TacMethods(self)
         self.treturns = TacReturns(self) if TacReturns is not None else None
         self.stmts    = TacStatements(self)
+        self.class_layout: dict[str, dict[str, int]] = {}
 
+    def sizeofType(self, type_name: str) -> int:
+        """
+        Tamaño en bytes por tipo. Simplificado:
+        - integer: 4
+        - cualquier 'class' (referencia/objeto): 4 (puntero/handle)
+        - fallback: 4
+        """
+        try:
+            tn = (type_name or "").strip().lower()
+        except Exception:
+            tn = "integer"
 
+        if tn == "integer":
+            return 4
+        # Si el nombre coincide con una clase conocida, tratamos como referencia (4)
+        if tn in (getattr(self, "known_classes", set()) or set()):
+            return 4
+        # Fallback conservador
+        return 4
 
+    def buildClassLayout(self, class_name: str) -> None:
+        """
+        Intenta construir el layout de una clase a partir de la info disponible.
+        Preferencia: usar metadatos del 'class_handler' si existen.
+        """
+        if not class_name or class_name == "<anon>":
+            log(f"[TacGenerator][layout] nombre de clase inválido: {class_name}", channel="tac")
+            return
+
+        # Evitar recomputar
+        if class_name in self.class_layout:
+            return
+
+        fields: list[tuple[str, str]] = []
+
+        # 1) Intento via class_handler (si semántico guardó esa info)
+        # Buscamos algún método común que devuelva (nombre_campo, tipo_campo)
+        for candidate in ("get_fields", "getFields", "fields_of", "getFieldList"):
+            getter = getattr(self.class_handler, candidate, None)
+            if callable(getter):
+                try:
+                    res = getter(class_name)  # se espera lista de (name, type) o similar
+                    if isinstance(res, (list, tuple)) and res:
+                        # Normalizamos a lista de tuplas (name, type)
+                        tmp = []
+                        for it in res:
+                            if isinstance(it, (list, tuple)) and len(it) >= 2:
+                                tmp.append((str(it[0]), str(it[1])))
+                            elif hasattr(it, "name") and hasattr(it, "type"):
+                                tmp.append((str(it.name), str(it.type)))
+                        if tmp:
+                            fields = tmp
+                            break
+                except Exception:
+                    pass
+
+        if not fields:
+            log(f"[TacGenerator][layout] no se encontraron campos para clase '{class_name}' vía class_handler; se omite layout por ahora.", channel="tac")
+            return
+
+        # 2) Construir offsets
+        offset = 0
+        layout: dict[str, int] = {}
+        for fname, ftype in fields:
+            layout[fname] = offset
+            offset += self.sizeofType(ftype)
+
+        self.class_layout[class_name] = layout
+        log(f"[TacGenerator][layout] {class_name} -> {layout}", channel="tac")
 
     # Devuelve el primer nodo si la llamada retorna lista; si no, el propio valor
     def h_First(self, ctx, name):
@@ -140,8 +208,16 @@ class TacGenerator(CompiscriptVisitor):
 
     # ---------- Clases / Funciones ----------
     def visitClassDeclaration(self, ctx: CompiscriptParser.ClassDeclarationContext):
-        log(f"[TacGenerator] visitClassDeclaration - clase: {self.h_IdentText(ctx)}", channel="tac")
-        return self.tmethods.visitClassDeclaration(ctx)
+        class_name = self.h_IdentText(ctx)
+        log(f"[TacGenerator] visitClassDeclaration - clase: {class_name}", channel="tac")
+        res = self.tmethods.visitClassDeclaration(ctx)
+
+        try:
+            self.buildClassLayout(class_name)
+        except Exception as e:
+            log(f"[TacGenerator][layout] error construyendo layout de '{class_name}': {e}", channel="tac")
+
+        return res
 
     def visitFunctionDeclaration(self, ctx: CompiscriptParser.FunctionDeclarationContext):
         log(f"[TacGenerator] visitFunctionDeclaration - función: {self.h_IdentText(ctx)}", channel="tac")
