@@ -334,7 +334,8 @@ class TacLValues:
                         channel="tac"
                     )
 
-                    q = self.v.emitter.emit(Op.FIELD_LOAD, arg1=base_place, res=t_val, label=label_for_emit)
+                    self.v.emitter.emitFieldLoad(base_place, label_for_emit, t_val)
+                    q = None
 
                     # Guardar metadatos útiles para depuración/backends
                     try:

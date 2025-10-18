@@ -198,7 +198,7 @@ class TacStatements:
                         off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
                         label_for_emit = off if isinstance(off, int) else prop_name
 
-                        self.v.emitter.emit(Op.FIELD_LOAD, arg1=curr_place, res=t_next, label=label_for_emit)
+                        self.v.emitter.emitFieldLoad(curr_place, label_for_emit, t_next)
 
                         # Avanzar owner_name con el tipo del atributo (para el siguiente salto)
                         if owner_name:
@@ -518,7 +518,7 @@ class TacStatements:
                 channel="tac"
             )
 
-            self.v.emitter.emit(Op.FIELD_STORE, arg1=obj_place, res=rhs_place, label=label_for_emit)
+            self.v.emitter.emitFieldStore(obj_place, label_for_emit, rhs_place)
             
             if it_obj: self.v.emitter.temp_pool.free(obj_place, "*")
             if it_rhs: self.v.emitter.temp_pool.free(rhs_place, "*")

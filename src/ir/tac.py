@@ -109,18 +109,18 @@ class Quad:
             # "t1 := - x" o "t1 := ! x"
             return f"{self.res} := {op_txt} {self.arg1}".strip()
 
-
         if o is Op.BINARY:
             op_txt = str(self.label or "?")
             return f"{self.res} := {self.arg1} {op_txt} {self.arg2}"
 
-
         if o is Op.INDEX_LOAD:
-            return f"{self.res} = {self.arg1}[{self.arg2}]"
+            # Usamos := para mantener el estilo de ASSIGN/BINARY
+            return f"{self.res} := {self.arg1}[{self.arg2}]"
 
         if o is Op.INDEX_STORE:
-            # Nota: usamos label para el índice textual si vino así
-            return f"{self.arg1}[{self.label}] = {self.res}"
+            # Preferimos arg2; si no vino, caemos a label para compatibilidad
+            idx_txt = self.arg2 if self.arg2 is not None else self.label
+            return f"{self.arg1}[{idx_txt}] := {self.res}"
 
         if o is Op.FIELD_LOAD:
             return f"{self.res} = {self.arg1}.{self.label}"
