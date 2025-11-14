@@ -19,8 +19,9 @@ class Program {
 
     // Funciones auxiliares
     function InputInt(): integer {
-        return 0; // simulación de entrada
+        return this.z.a;
     }
+
 
     function OutputInt(n: integer): void {
         // simulación de salida

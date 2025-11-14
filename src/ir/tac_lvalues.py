@@ -58,6 +58,19 @@ class TacLValues:
         return None
 
     # --------------------------- util interno ----------------------------
+    def resolveAttrType(self, owner: str, field: str):
+        """
+        Pide a class_handler el tipo del atributo 'field' en 'owner'.
+        Devuelve None si no está disponible.
+        """
+        try:
+            ch = getattr(self.v, "class_handler", None)
+            if ch is not None and hasattr(ch, "getAttributeType"):
+                return ch.getAttributeType(owner, field)
+        except Exception:
+            pass
+        return None
+
     def symType(self, name: str):
         """Resuelve el tipo de un símbolo local/global probando varios nombres de atributo."""
         try:
@@ -332,44 +345,32 @@ class TacLValues:
                 log(f"\t[TAC_LVALUES] CallExpr result: place={base_place}", channel="tac")
                 continue
 
-            # 3.c) Acceso a propiedad: campo o método enlazado
+            # 3.c) Acceso a propiedad: campo o método enlazado (unificado y robusto)
             if isinstance(suf, CompiscriptParser.PropertyAccessExprContext):
                 prop_name = suf.Identifier().getText()
                 log(f"\t[TAC_LVALUES] PropertyAccessExpr: {prop_name} on base={base_place}", channel="tac")
 
-                # Campo de clase → FIELD_LOAD
+                # 1) Determinar owner de forma robusta
+                owner_type = base_type if isinstance(base_type, ClassType) else self.inferTypeFromPlace(base_place)
+                owner_name = getattr(owner_type, "name", None)
+
+                # 2) Intentar como CAMPO (preferido si tenemos owner_name)
                 attr_t = None
-                if isinstance(base_type, ClassType):
-                    attr_t = self.v.class_handler.getAttributeType(base_type.name, prop_name)
+                if owner_name:
+                    attr_t = self.resolveAttrType(owner_name, prop_name)
 
                 if attr_t is not None:
-                    
+                    # FIELD_LOAD con offset si está disponible
                     t_val = self.v.emitter.temp_pool.newTemp(typeToTempKind(attr_t))
-
-                    owner_name = base_type.name
                     off = self.resolveFieldOffset(owner_name, prop_name)
-
-                    label_for_emit = off if isinstance(off, int) else prop_name  # fallback seguro
+                    label_for_emit = off if isinstance(off, int) else prop_name
 
                     log(
                         f"\t[TAC_LVALUES] FIELD_LOAD resolve: owner={owner_name}, field={prop_name}, "
                         f"offset={off}, using_label={label_for_emit}",
                         channel="tac"
                     )
-
                     self.v.emitter.emitFieldLoad(base_place, label_for_emit, t_val)
-                    q = None
-
-                    # Guardar metadatos útiles para depuración/backends
-                    try:
-                        if q is not None:
-                            if isinstance(off, int):
-                                setattr(q, "_field_offset", off)
-                            setattr(q, "_field_owner", owner_name)
-                            setattr(q, "_field_name", prop_name)
-                    except Exception:
-                        pass
-
 
                     if base_is_temp:
                         self.v.emitter.temp_pool.free(base_place, "*")
@@ -378,15 +379,15 @@ class TacLValues:
                     base_is_temp = True
                     base_type = attr_t
                     setPlace(suf, base_place, True)
-                    # ← anotar tipo en el nodo del sufijo (y opcional log)
                     try:
                         setattr(suf, "_type", base_type)
                     except Exception:
                         pass
                     continue
 
-                # Método (con herencia)
-                owner = getattr(base_type, "name", None)
+                # 3) No es campo → intentar como MÉTODO (con herencia)
+                #    (reutilizamos lógica existente, pero owner_name ya puede venir inf.)
+                owner = owner_name
                 if owner is None:
                     st = self.symType(base_place)
                     if isinstance(st, ClassType):
@@ -431,7 +432,7 @@ class TacLValues:
                     setPlace(suf, base_place, base_is_temp)
                     continue
 
-                # Ni atributo ni método: ya reportado por semántica
+                # 4) Ni atributo ni método: ya reportado por semántica
                 log(f"\t[TAC_LVALUES] PropertyAccessExpr result: place={base_place}", channel="tac")
                 continue
 

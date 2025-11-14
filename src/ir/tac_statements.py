@@ -122,43 +122,93 @@ class TacStatements:
 
 
     def expressionsFromCTX(self, ctx):
+        """
+        Devuelve una lista con TODOS los ExpressionContext que cuelgan de ctx, en orden.
+        Soporta casos donde ni getRuleContexts(ExpressionContext) ni expression() entregan lo esperado.
+        """
         exprs = []
+
+        # 1) Intento directo (si la gramática expone bien los hijos)
         try:
-            exprs = ctx.getRuleContexts(CompiscriptParser.ExpressionContext)
-            if exprs:
-                exprs = list(exprs)
+            direct = ctx.getRuleContexts(CompiscriptParser.ExpressionContext)
+            if direct:
+                exprs.extend(list(direct))
         except Exception:
             pass
+
+        # 2) Intento por accessor singular/plural común
         if not exprs:
             try:
                 raw = ctx.expression()
                 if raw is None:
-                    exprs = []
+                    pass
                 elif isinstance(raw, (list, tuple)):
-                    exprs = list(raw)
+                    exprs.extend(list(raw))
                 else:
-                    exprs = [raw]
+                    exprs.append(raw)
             except Exception:
-                exprs = []
-        log(f"\t[TacStatements][expressionsFromCTX] found {len(exprs)} expressions in {ctx.getText()}", channel="tac")
+                pass
+
+        # 3) Fallback recursivo: recolectar TODOS los ExpressionContext descendientes en orden DFS
+        if not exprs:
+            def collectExprs(node, acc):
+                try:
+                    for ch in node.getChildren():
+                        if isinstance(ch, CompiscriptParser.ExpressionContext):
+                            acc.append(ch)
+                        collectExprs(ch, acc)
+                except Exception:
+                    return
+            collectExprs(ctx, exprs)
+
+        log(f"\t[TacStatements][expressionsFromCTX] found {len(exprs)} expressions in {getattr(ctx,'getText',lambda:'' )()}", channel="tac")
         return exprs
 
 
     def rhsOfAssignExpr(self, expr_ctx):
-        rhs = None
-        try:
+        """
+        Devuelve el ExpressionContext del RHS de una asignación, ignorando
+        cualquier ExpressionContext que pertenezca al LHS.
+        """
+        assign = expr_ctx if isinstance(expr_ctx, CompiscriptParser.AssignExprContext) else None
+        if assign is None:
             assign = self.findDesc(expr_ctx, CompiscriptParser.AssignExprContext)
-            if assign is not None:
-                try:
-                    rhs = assign.exprNoAssign()
-                    if isinstance(rhs, (list, tuple)):
-                        rhs = rhs[-1] if rhs else None
-                except Exception:
-                    rhs = None
-        except Exception:
-            rhs = None
+        if assign is None:
+            # Fallback viejo (por compatibilidad)
+            exprs = self.expressionsFromCTX(expr_ctx)
+            rhs = exprs[-1] if exprs else None
+            log(f"\t[TacStatements][rhsOfAssignExpr][fallback-no-assign] -> {rhs}", channel="tac")
+            return rhs
 
-        log(f"\t[TacStatements][rhsOfAssignExpr] rhs for {expr_ctx.getText()} -> {rhs}", channel="tac")
+        # LHS del assign
+        lhs_ctx = self.findDesc(assign, CompiscriptParser.LeftHandSideContext)
+
+        # Recolectar TODAS las ExpressionContext bajo 'assign'
+        all_exprs = []
+        def collect(node):
+            try:
+                for ch in node.getChildren():
+                    if isinstance(ch, CompiscriptParser.ExpressionContext):
+                        all_exprs.append(ch)
+                    collect(ch)
+            except Exception:
+                return
+        collect(assign)
+
+        # Función para saber si un nodo es descendiente de otro (usando parentCtx)
+        def is_descendant_of(node, ancestor):
+            cur = node
+            while cur is not None:
+                if cur is ancestor:
+                    return True
+                cur = getattr(cur, "parentCtx", None)
+            return False
+
+        # Filtrar expresiones que están DENTRO del LHS
+        rhs_candidates = [e for e in all_exprs if not (lhs_ctx and is_descendant_of(e, lhs_ctx))]
+
+        rhs = rhs_candidates[-1] if rhs_candidates else None
+        log(f"\t[TacStatements][rhsOfAssignExpr] rhs for {getattr(expr_ctx,'getText',lambda:'' )()} -> {rhs}", channel="tac")
         return rhs
 
 
@@ -262,6 +312,132 @@ class TacStatements:
         return (base_txt, plan)
 
 
+    def basePlaceFromText(self, base_txt: str):
+        """
+        Convierte el texto base ('this' o un identificador) en el 'place' real.
+        - 'this' se mantiene.
+        - Si es un símbolo conocido, usa place_of_symbol(simbolo).
+        - Si no, devuelve el propio texto (fallback).
+        """
+        if base_txt == "this":
+            return "this"
+        try:
+            sym = self.v.scopeManager.lookup(base_txt)
+            if sym is not None:
+                return place_of_symbol(sym)
+        except Exception:
+            pass
+        return base_txt
+
+
+    def advanceThroughPlan(self, base_txt, plan):
+        """
+        Avanza por todos los pasos del plan salvo el último, emitiendo LOADs necesarios y
+        propagando el tipo dueño (owner_type). Devuelve:
+            curr_place, owner_type, temp_to_free
+        """
+        curr_place = self.basePlaceFromText(base_txt)
+        temp_to_free = None
+        owner_type = self.symType(base_txt)
+
+        for i, (kind, payload) in enumerate(plan[:-1]):
+            if kind == "Index":
+                # Propagar tipo de elemento si es arreglo
+                if hasattr(owner_type, "elem_type"):
+                    owner_type = owner_type.elem_type or owner_type
+
+                # Evaluar índice
+                idx_expr = payload.expression() if hasattr(payload, "expression") else payload
+                self.v.visit(idx_expr)
+                p_idx, it_idx = deepPlace(idx_expr)
+                idx_place = p_idx or idx_expr.getText()
+
+                # Bounds + LOAD de elemento
+                if hasattr(self.v.emitter, "emitIndexLoad"):
+                    t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, curr_place)
+                    t_next = self.v.emitter.temp_pool.newTemp("ref")
+                    self.v.emitter.emitIndexLoad(t_next, curr_place, idx_place)
+                    if t_len: self.v.emitter.temp_pool.free(t_len, "*")
+                    if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
+                else:
+                    # Fallback: al menos bounds-check
+                    self.v.emitter.emitBoundsCheck(idx_place, curr_place)
+                    t_next = curr_place  # sin LOAD no avanzamos realmente
+
+                if temp_to_free and temp_to_free != 'this':
+                    self.v.emitter.temp_pool.free(temp_to_free, "*")
+                temp_to_free = t_next
+                curr_place = t_next
+
+            elif kind == "Prop":
+                prop_name = payload
+                t_next = self.v.emitter.temp_pool.newTemp("*")
+
+                owner_name = owner_type.name if isinstance(owner_type, ClassType) else None
+                off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
+                label_for_emit = off if isinstance(off, int) else prop_name
+                self.v.emitter.emitFieldLoad(curr_place, label_for_emit, t_next)
+
+                # Propagación de tipo tras Prop
+                if isinstance(owner_type, ClassType):
+                    next_t = self.resolveAttrType(owner_type.name, prop_name)
+                    owner_type = next_t or owner_type
+
+                if temp_to_free and temp_to_free != 'this':
+                    self.v.emitter.temp_pool.free(temp_to_free, "*")
+                temp_to_free = t_next
+                curr_place = t_next
+
+        return curr_place, owner_type, temp_to_free
+
+
+    def doFinalStore(self, curr_place, owner_type, last_kind, last_payload, rhs_place):
+        if last_kind == "Index":
+            idx_expr = last_payload.expression() if hasattr(last_payload, "expression") else last_payload
+            self.v.visit(idx_expr)
+            p_idx, it_idx = deepPlace(idx_expr)
+            idx_place = p_idx or idx_expr.getText()
+
+            t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, curr_place)
+            self.v.emitter.emitIndexStore(curr_place, idx_place, rhs_place)
+            if t_len: self.v.emitter.temp_pool.free(t_len, "*")
+            if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
+
+        elif last_kind == "Prop":
+            prop_name = last_payload
+            owner_name = owner_type.name if isinstance(owner_type, ClassType) else None
+            off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
+            label_for_emit = off if isinstance(off, int) else prop_name
+            self.v.emitter.emitFieldStore(curr_place, label_for_emit, rhs_place)
+
+
+    def processPropertyIndexAssign(self, base_txt, plan, rhs_node):
+        # Evaluar RHS una sola vez
+        self.v.visit(rhs_node)
+        p_rhs, it_rhs = deepPlace(rhs_node)
+        rhs_place = p_rhs or rhs_node.getText()
+        
+        is_call = self.findDesc(rhs_node, CompiscriptParser.CallExprContext) is not None
+        if is_call and (not p_rhs or rhs_place == rhs_node.getText()):
+            tR = self.v.emitter.temp_pool.newTemp("*")  # usa "*" o un tipo más específico si lo tienes
+            self.v.emitter.emitAssign(tR, "R")
+            rhs_place = tR
+            it_rhs = True
+
+        # Avanzar por plan salvo último paso
+        curr_place, owner_type, temp_to_free = self.advanceThroughPlan(base_txt, plan)
+
+        # Paso final: STORE
+        last_kind, last_payload = plan[-1]
+        self.doFinalStore(curr_place, owner_type, last_kind, last_payload, rhs_place)
+
+        # Liberar temporales
+        if it_rhs: self.v.emitter.temp_pool.free(rhs_place, "*")
+        if temp_to_free and temp_to_free != 'this': self.v.emitter.temp_pool.free(temp_to_free, "*")
+
+        self.v.emitter.temp_pool.resetPerStatement()
+
+
     def visitExpressionStatement(self, ctx):
         log(f"\t[TacStatements][visitExpressionStatement] enter: {ctx.getText()}", channel="tac")
 
@@ -291,89 +467,8 @@ class TacStatements:
                 base_txt, plan = mp
                 rhs_node = self.rhsOfAssignExpr(expr)
                 if rhs_node is not None:
-                    curr_place = 'this' if base_txt == 'this' else base_txt
-                    temp_to_free = None
-                    owner_type = self.symType(base_txt) 
-
-                    # visitar RHS una sola vez (lo usaremos al final)
-                    self.v.visit(rhs_node)
-                    p_rhs, it_rhs = deepPlace(rhs_node)
-                    rhs_place = p_rhs or rhs_node.getText()
-
-                    # Procesar todos los pasos salvo el último, avanzando curr_place
-                    for i, (kind, payload) in enumerate(plan[:-1]):
-                        if kind == "Index":
-                            if hasattr(owner_type, "elem_type"):
-                                # típico ArrayType(elem_type=...)
-                                owner_type = owner_type.elem_type or owner_type
-                            idx_expr = payload.expression() if hasattr(payload, "expression") else payload
-                            self.v.visit(idx_expr)
-                            p_idx, it_idx = deepPlace(idx_expr)
-                            idx_place = p_idx or idx_expr.getText()
-
-                            if hasattr(self.v.emitter, "emitIndexLoad"):
-                                t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, curr_place)
-                                t_next = self.v.emitter.temp_pool.newTemp("ref")
-                                self.v.emitter.emitIndexLoad(t_next, curr_place, idx_place)
-                                if t_len: self.v.emitter.temp_pool.free(t_len, "*")
-                                if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
-                            else:
-                                # Fallback: al menos el check
-                                self.v.emitter.emitBoundsCheck(idx_place, curr_place)
-                                t_next = curr_place  # no avanzamos realmente sin emitIndexLoad
-
-                            if temp_to_free and temp_to_free != 'this':
-                                self.v.emitter.temp_pool.free(temp_to_free, "*")
-                            temp_to_free = t_next
-                            curr_place = t_next
-
-                        elif kind == "Prop":
-                            prop_name = payload
-                            t_next = self.v.emitter.temp_pool.newTemp("*")
-
-                            owner_name = owner_type.name if isinstance(owner_type, ClassType) else None
-                            off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
-                            label_for_emit = off if isinstance(off, int) else prop_name
-                            self.v.emitter.emitFieldLoad(curr_place, label_for_emit, t_next)
-
-                            # actualizar owner_type para siguientes hops (propagación tras Prop)
-                            if isinstance(owner_type, ClassType):
-                                next_t = self.resolveAttrType(owner_type.name, prop_name)
-                                owner_type = next_t or owner_type
-
-                            if temp_to_free and temp_to_free != 'this':
-                                self.v.emitter.temp_pool.free(temp_to_free, "*")
-                            temp_to_free = t_next
-                            curr_place = t_next
-
-                    # Paso final: decide STORE por Index o por Prop
-                    last_kind, last_payload = plan[-1]
-                    if last_kind == "Index":
-                        idx_expr = last_payload.expression() if hasattr(last_payload, "expression") else last_payload
-                        self.v.visit(idx_expr)
-                        p_idx, it_idx = deepPlace(idx_expr)
-                        idx_place = p_idx or idx_expr.getText()
-
-                        t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, curr_place)
-                        self.v.emitter.emitIndexStore(curr_place, idx_place, rhs_place)
-                        if t_len: self.v.emitter.temp_pool.free(t_len, "*")
-                        if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
-
-                    elif last_kind == "Prop":
-                        prop_name = last_payload
-                        owner_name = owner_type.name if isinstance(owner_type, ClassType) else None
-                        off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
-                        label_for_emit = off if isinstance(off, int) else prop_name
-                        self.v.emitter.emitFieldStore(curr_place, label_for_emit, rhs_place)
-
-                    # liberar temporales
-                    if it_rhs: self.v.emitter.temp_pool.free(rhs_place, "*")
-                    if temp_to_free and temp_to_free != 'this': self.v.emitter.temp_pool.free(temp_to_free, "*")
-
-                    self.v.emitter.temp_pool.resetPerStatement()
+                    self.processPropertyIndexAssign(base_txt, plan, rhs_node)
                     return None
-
-
 
             # 2) Luego: Asignación simple a[i] = rhs
             m = self.matchSimpleIndexAssign(expr)
@@ -390,8 +485,9 @@ class TacStatements:
                     p_rhs, it_rhs = deepPlace(rhs_node)
                     rhs_place = p_rhs or rhs_node.getText()
 
-                    t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, base_name)
-                    self.v.emitter.emitIndexStore(base_name, idx_place, rhs_place)
+                    base_place = self.basePlaceFromText(base_name)
+                    t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, base_place)
+                    self.v.emitter.emitIndexStore(base_place, idx_place, rhs_place)
                     if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
                     if it_rhs: self.v.emitter.temp_pool.free(rhs_place, "*")
                     if t_len: self.v.emitter.temp_pool.free(t_len, "*")
@@ -523,93 +619,29 @@ class TacStatements:
         exprs = self.expressionsFromCTX(ctx)
         n = len(exprs)
 
+        if is_expr_ctx and n == 0:
+            # Intentar parsear como "prop/index assign" directamente desde ctx
+            mp = self.matchPropertyIndexAssign(ctx)
+            if mp is not None:
+                base_txt, plan = mp
+                rhs_node = self.rhsOfAssignExpr(ctx)
+                if rhs_node is not None:
+                    self.processPropertyIndexAssign(base_txt, plan, rhs_node)
+                    log(f"\t[TacStatements][visitAssignment] handled via fallback (n==0): {base_txt}, plan={plan}", channel="tac")
+                    return None
+            # Si no es prop/index, no hacemos nada especial y seguimos con el flujo normal
+            log("\t[TacStatements][visitAssignment] fallback path (n==0) did not match plan", channel="tac")
+
+
         if is_expr_ctx and n == 2:
             # 1) obj.prop[...] = expr
             mp = self.matchPropertyIndexAssign(exprs[0])
             if mp is not None:
                 base_txt, plan = mp
                 rhs_node = exprs[1]
-
-                curr_place = 'this' if base_txt == 'this' else base_txt
-                temp_to_free = None
-                owner_type = self.symType(base_txt)
-
-                # Pre-evaluar RHS
-                self.v.visit(rhs_node)
-                p_rhs, it_rhs = deepPlace(rhs_node)
-                rhs_place = p_rhs or rhs_node.getText()
-
-                # Avanzar por todos los pasos salvo el último
-                for i, (kind, payload) in enumerate(plan[:-1]):
-                    if kind == "Index":
-                        if hasattr(owner_type, "elem_type"):
-                            owner_type = owner_type.elem_type or owner_type
-                        idx_expr = payload.expression() if hasattr(payload, "expression") else payload
-                        self.v.visit(idx_expr)
-                        p_idx, it_idx = deepPlace(idx_expr)
-                        idx_place = p_idx or idx_expr.getText()
-
-                        if hasattr(self.v.emitter, "emitIndexLoad"):
-                            t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, curr_place)
-                            t_next = self.v.emitter.temp_pool.newTemp("ref")
-                            self.v.emitter.emitIndexLoad(t_next, curr_place, idx_place)
-                            if t_len: self.v.emitter.temp_pool.free(t_len, "*")
-                            if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
-                        else:
-                            self.v.emitter.emitBoundsCheck(idx_place, curr_place)
-                            t_next = curr_place
-
-                        if temp_to_free and temp_to_free != 'this':
-                            self.v.emitter.temp_pool.free(temp_to_free, "*")
-                        temp_to_free = t_next
-                        curr_place = t_next
-
-                    elif kind == "Prop":
-                        prop_name = payload
-                        t_next = self.v.emitter.temp_pool.newTemp("*")
-
-                        owner_name = owner_type.name if isinstance(owner_type, ClassType) else None
-                        off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
-                        label_for_emit = off if isinstance(off, int) else prop_name
-                        self.v.emitter.emitFieldLoad(curr_place, label_for_emit, t_next)
-
-                        # Propagación de tipo tras Prop
-                        if isinstance(owner_type, ClassType):
-                            next_t = self.resolveAttrType(owner_type.name, prop_name)
-                            owner_type = next_t or owner_type
-
-                        if temp_to_free and temp_to_free != 'this':
-                            self.v.emitter.temp_pool.free(temp_to_free, "*")
-                        temp_to_free = t_next
-                        curr_place = t_next
-
-                # Paso final: STORE por Index o por Prop
-                last_kind, last_payload = plan[-1]
-                if last_kind == "Index":
-                    idx_expr = last_payload.expression() if hasattr(last_payload, "expression") else last_payload
-                    self.v.visit(idx_expr)
-                    p_idx, it_idx = deepPlace(idx_expr)
-                    idx_place = p_idx or idx_expr.getText()
-
-                    t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, curr_place)
-                    self.v.emitter.emitIndexStore(curr_place, idx_place, rhs_place)
-                    if t_len: self.v.emitter.temp_pool.free(t_len, "*")
-                    if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
-
-                elif last_kind == "Prop":
-                    prop_name = last_payload
-                    owner_name = owner_type.name if isinstance(owner_type, ClassType) else None
-                    off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
-                    label_for_emit = off if isinstance(off, int) else prop_name
-                    self.v.emitter.emitFieldStore(curr_place, label_for_emit, rhs_place)
-
-                if it_rhs: self.v.emitter.temp_pool.free(rhs_place, "*")
-                if temp_to_free and temp_to_free != 'this': self.v.emitter.temp_pool.free(temp_to_free, "*")
-
-                self.v.emitter.temp_pool.resetPerStatement()
+                self.processPropertyIndexAssign(base_txt, plan, rhs_node)
                 log(f"\t[TacStatements][visitAssignment] property index assign complete (general)", channel="tac")
                 return None
-
           
             
             # 2. v[i] = expr
@@ -628,8 +660,9 @@ class TacStatements:
                 p_rhs, it_rhs = deepPlace(rhs_node)
                 rhs_place = p_rhs or rhs_node.getText()
 
-                t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, base_name)
-                self.v.emitter.emitIndexStore(base_name, idx_place, rhs_place)
+                base_place = self.basePlaceFromText(base_name)
+                t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, base_place)
+                self.v.emitter.emitIndexStore(base_place, idx_place, rhs_place)
                 if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
                 if it_rhs: self.v.emitter.temp_pool.free(rhs_place, "*")
                 if t_len: self.v.emitter.temp_pool.free(t_len, "*")
@@ -694,87 +727,9 @@ class TacStatements:
             # 1) property-index
             mp = self.matchPropertyIndexAssign(exprs[0])
             if mp is not None:
-                log(f"\t[TacStatements][visitAssignment] property index assign (general): {mp}", channel="tac")
                 base_txt, plan = mp
                 rhs_node = exprs[1]
-
-                curr_place = 'this' if base_txt == 'this' else base_txt
-                temp_to_free = None
-                owner_type = self.symType(base_txt)
-
-                # Pre-evaluar RHS
-                self.v.visit(rhs_node)
-                p_rhs, it_rhs = deepPlace(rhs_node)
-                rhs_place = p_rhs or rhs_node.getText()
-
-                # Avanzar por todos los pasos salvo el último
-                for i, (kind, payload) in enumerate(plan[:-1]):
-                    if kind == "Index":
-                        if hasattr(owner_type, "elem_type"):
-                            owner_type = owner_type.elem_type or owner_type
-                        idx_expr = payload.expression() if hasattr(payload, "expression") else payload
-                        self.v.visit(idx_expr)
-                        p_idx, it_idx = deepPlace(idx_expr)
-                        idx_place = p_idx or idx_expr.getText()
-
-                        if hasattr(self.v.emitter, "emitIndexLoad"):
-                            t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, curr_place)
-                            t_next = self.v.emitter.temp_pool.newTemp("ref")
-                            self.v.emitter.emitIndexLoad(t_next, curr_place, idx_place)
-                            if t_len: self.v.emitter.temp_pool.free(t_len, "*")
-                            if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
-                        else:
-                            self.v.emitter.emitBoundsCheck(idx_place, curr_place)
-                            t_next = curr_place
-
-                        if temp_to_free and temp_to_free != 'this':
-                            self.v.emitter.temp_pool.free(temp_to_free, "*")
-                        temp_to_free = t_next
-                        curr_place = t_next
-
-                    elif kind == "Prop":
-                        prop_name = payload
-                        t_next = self.v.emitter.temp_pool.newTemp("*")
-
-                        owner_name = owner_type.name if isinstance(owner_type, ClassType) else None
-                        off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
-                        label_for_emit = off if isinstance(off, int) else prop_name
-                        self.v.emitter.emitFieldLoad(curr_place, label_for_emit, t_next)
-
-                        # Propagación tras Prop
-                        if isinstance(owner_type, ClassType):
-                            next_t = self.resolveAttrType(owner_type.name, prop_name)
-                            owner_type = next_t or owner_type
-
-                        if temp_to_free and temp_to_free != 'this':
-                            self.v.emitter.temp_pool.free(temp_to_free, "*")
-                        temp_to_free = t_next
-                        curr_place = t_next
-
-                # STORE por Index o por Prop
-                last_kind, last_payload = plan[-1]
-                if last_kind == "Index":
-                    idx_expr = last_payload.expression() if hasattr(last_payload, "expression") else last_payload
-                    self.v.visit(idx_expr)
-                    p_idx, it_idx = deepPlace(idx_expr)
-                    idx_place = p_idx or idx_expr.getText()
-
-                    t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, curr_place)
-                    self.v.emitter.emitIndexStore(curr_place, idx_place, rhs_place)
-                    if t_len: self.v.emitter.temp_pool.free(t_len, "*")
-                    if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
-
-                elif last_kind == "Prop":
-                    prop_name = last_payload
-                    owner_name = owner_type.name if isinstance(owner_type, ClassType) else None
-                    off = self.resolveFieldOffset(owner_name, prop_name) if owner_name else None
-                    label_for_emit = off if isinstance(off, int) else prop_name
-                    self.v.emitter.emitFieldStore(curr_place, label_for_emit, rhs_place)
-
-                if it_rhs: self.v.emitter.temp_pool.free(rhs_place, "*")
-                if temp_to_free and temp_to_free != 'this': self.v.emitter.temp_pool.free(temp_to_free, "*")
-
-                self.v.emitter.temp_pool.resetPerStatement()
+                self.processPropertyIndexAssign(base_txt, plan, rhs_node)
                 log(f"\t[TacStatements][visitAssignment] property index assign complete (general)", channel="tac")
                 return None
 
@@ -794,8 +749,9 @@ class TacStatements:
                 p_rhs, it_rhs = deepPlace(rhs_node)
                 rhs_place = p_rhs or rhs_node.getText()
 
-                t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, base_name)
-                self.v.emitter.emitIndexStore(base_name, idx_place, rhs_place)
+                base_place = self.basePlaceFromText(base_name)
+                t_len, _ = self.v.emitter.emitBoundsCheck(idx_place, base_place)
+                self.v.emitter.emitIndexStore(base_place, idx_place, rhs_place)
                 if it_idx: self.v.emitter.temp_pool.free(idx_place, "*")
                 if it_rhs: self.v.emitter.temp_pool.free(rhs_place, "*")
                 if t_len: self.v.emitter.temp_pool.free(t_len, "*")
@@ -880,7 +836,6 @@ class TacStatements:
             return None
 
         log("\t[TacStatements][visitAssignment] exit", channel="tac")
-        # Asegurar reset incluso si ninguna rama hizo return temprano
         self.v.emitter.temp_pool.resetPerStatement()
         return None
 
