@@ -11,6 +11,33 @@ class InstructionSelector:
         self.addr_desc = addr_desc
         self.frame_builder = frame_builder  # se usará más adelante para prólogos reales
 
+    def isImmediate(self, value):
+        if value is None:
+            return False
+        s = str(value)
+        if s.startswith("-"):
+            return s[1:].isdigit()
+        return s.isdigit()
+
+    def isTemp(self, name):
+        if not isinstance(name, str):
+            return False
+        if not name.startswith("t"):
+            return False
+        return name[1:].isdigit()
+
+    def parseAddress(self, name):
+        if not isinstance(name, str):
+            return None
+        if name.startswith("fp[") and name.endswith("]"):
+            offset = int(name[3:-1])
+            return (self.machine_desc.fp, offset)
+        if name.startswith("gp[") and name.endswith("]"):
+            offset = int(name[3:-1])
+            return (self.machine_desc.gp, offset)
+        return None
+
+
     def lowerQuad(self, quad, mips_emitter):
         log(f"[CG] lowering quad: {quad}", channel="cg")
         op = quad.op
@@ -126,7 +153,66 @@ class InstructionSelector:
     # ---------- expresiones / datos ----------
 
     def lowerAssign(self, quad, mips_emitter):
-        mips_emitter.emitComment(f"assign {quad.res} := {quad.arg1}")
+        dst_name = quad.res
+        src = quad.arg1
+
+        # paso 1: obtener un registro que contenga el valor de src
+        src_reg = None
+
+        # caso especial: resultado de llamada
+        if src == "R":
+            src_reg = self.machine_desc.ret_regs[0]  # $v0
+
+        # inmediato numérico, ej. 5, -3
+        elif self.isImmediate(src):
+            target_name = dst_name if dst_name is not None else str(src)
+            src_reg = self.reg_alloc.getRegFor(target_name, self.current_frame, mips_emitter)
+            mips_emitter.emitInstr("li", src_reg, str(src))
+
+        # origen en memoria tipo fp[16] o gp[24]
+        else:
+            addr_src = self.parseAddress(src)
+            if addr_src is not None:
+                base_reg, offset = addr_src
+                # si el destino es temporal, usamos su nombre para el registro
+                reg_name = dst_name if self.isTemp(dst_name) else f"{src}_tmp"
+                src_reg = self.reg_alloc.getRegFor(reg_name, self.current_frame, mips_emitter)
+                mips_emitter.emitInstr("lw", src_reg, f"{offset}({base_reg})")
+            # origen es otro temporal tN
+            elif self.isTemp(src):
+                cand_regs = self.reg_alloc.reg_desc.valueRegs(src)
+                if cand_regs:
+                    src_reg = cand_regs[0]
+                else:
+                    # sin registro asociado, reservamos uno pero no cargamos nada real
+                    src_reg = self.reg_alloc.getRegFor(src, self.current_frame, mips_emitter)
+                    mips_emitter.emitComment(f"valor de {src} no inicializado en registros")
+            else:
+                # caso no soportado (strings, this, etc.), dejamos solo comentario
+                mips_emitter.emitComment(f"assign {dst_name} := {src} (no soportado aún)")
+                return
+
+        # si no hay destino, nada más que hacer
+        if dst_name is None:
+            return
+
+        # paso 2: escribir en el destino
+        addr_dst = self.parseAddress(dst_name)
+
+        # destino en memoria, tipo fp[0], gp[28], etc.
+        if addr_dst is not None:
+            base_reg, offset = addr_dst
+            mips_emitter.emitInstr("sw", src_reg, f"{offset}({base_reg})")
+            # de momento no actualizamos address descriptor para estos slots
+            return
+
+        # destino temporal tN -> asociar el registro al nombre
+        if self.isTemp(dst_name):
+            self.reg_alloc.bindReg(src_reg, dst_name)
+            return
+
+        # cualquier otra cosa la dejamos comentada
+        mips_emitter.emitComment(f"assign destino {dst_name} no soportado, valor en {src_reg}")
 
     def lowerBinary(self, quad, mips_emitter):
         mips_emitter.emitComment(

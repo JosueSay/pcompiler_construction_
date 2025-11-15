@@ -21,4 +21,4 @@ class MachineDesc:
         return reg_name in self.saved_regs
 
     def allRegs(self):
-        return self.temp_regs + self.saved_regs
+        return self.temp_regs + self.saved_regs + self.ret_regs
