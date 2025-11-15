@@ -37,6 +37,45 @@ class InstructionSelector:
             return (self.machine_desc.gp, offset)
         return None
 
+    def getValueReg(self, src, dst_hint, mips_emitter):
+        """
+        Devuelve un registro MIPS que contiene el valor lógico `src`.
+        Puede emitir instrucciones (li / lw) si es necesario.
+        """
+        # resultado de llamada
+        if src == "R":
+            return self.machine_desc.ret_regs[0]  # $v0
+
+        # inmediato numérico
+        if self.isImmediate(src):
+            name = dst_hint if dst_hint is not None else str(src)
+            reg = self.reg_alloc.getRegFor(name, self.current_frame, mips_emitter)
+            mips_emitter.emitInstr("li", reg, str(src))
+            return reg
+
+        # dirección de memoria: fp[...] o gp[...]
+        addr = self.parseAddress(src)
+        if addr is not None:
+            base_reg, offset = addr
+            name = dst_hint if dst_hint is not None else f"{src}_tmp"
+            reg = self.reg_alloc.getRegFor(name, self.current_frame, mips_emitter)
+            mips_emitter.emitInstr("lw", reg, f"{offset}({base_reg})")
+            return reg
+
+        # temporal tN
+        if self.isTemp(src):
+            regs = self.reg_alloc.reg_desc.valueRegs(src)
+            if regs:
+                # ya está en algún registro
+                return regs[0]
+            # no está en ningún registro, reservamos uno
+            reg = self.reg_alloc.getRegFor(src, self.current_frame, mips_emitter)
+            mips_emitter.emitComment(f"valor de {src} no inicializado en registros")
+            return reg
+
+        # cualquier otra cosa (strings, this, etc.) de momento no la bajamos
+        mips_emitter.emitComment(f"origen {src} no soportado en getValueReg")
+        return None
 
     def lowerQuad(self, quad, mips_emitter):
         log(f"[CG] lowering quad: {quad}", channel="cg")
@@ -215,9 +254,80 @@ class InstructionSelector:
         mips_emitter.emitComment(f"assign destino {dst_name} no soportado, valor en {src_reg}")
 
     def lowerBinary(self, quad, mips_emitter):
+        dst_name = quad.res
+        op = quad.label
+        left = quad.arg1
+        right = quad.arg2
+
+        # obtener registros para los operandos
+        reg_left = self.getValueReg(left,
+                                    left if self.isTemp(left) else dst_name,
+                                    mips_emitter)
+        reg_right = self.getValueReg(right,
+                                     right if self.isTemp(right) else None,
+                                     mips_emitter)
+
+        if reg_left is None or reg_right is None:
+            mips_emitter.emitComment(
+                f"binary {dst_name} := {left} {op} {right} (no soportado)"
+            )
+            return
+
+        # reutilizamos reg_left como registro destino físico
+        dst_reg = reg_left
+
+        # mapeo de operadores aritméticos
+        arith_ops = {
+            "+": "add",
+            "-": "sub",
+            "*": "mul",
+            "/": "div",
+            "%": "rem",
+        }
+
+        # mapeo de comparaciones a pseudoinstrucciones MIPS (0/1)
+        cmp_ops = {
+            "==": "seq",
+            "!=": "sne",
+            "<":  "slt",
+            "<=": "sle",
+            ">":  "sgt",
+            ">=": "sge",
+        }
+
+        if op in arith_ops:
+            mips_op = arith_ops[op]
+            mips_emitter.emitInstr(mips_op, dst_reg, reg_left, reg_right)
+        elif op in cmp_ops:
+            mips_op = cmp_ops[op]
+            mips_emitter.emitInstr(mips_op, dst_reg, reg_left, reg_right)
+        else:
+            mips_emitter.emitComment(f"operador binario '{op}' no soportado aún")
+            return
+
+        # escribir resultado lógico en el destino (similar a lowerAssign)
+
+        if dst_name is None:
+            return
+
+        addr_dst = self.parseAddress(dst_name)
+
+        # destino en memoria (fp[...] / gp[...])
+        if addr_dst is not None:
+            base_reg, offset = addr_dst
+            mips_emitter.emitInstr("sw", dst_reg, f"{offset}({base_reg})")
+            return
+
+        # destino temporal tN
+        if self.isTemp(dst_name):
+            self.reg_alloc.bindReg(dst_reg, dst_name)
+            return
+
+        # cualquier otro caso de momento solo lo documentamos
         mips_emitter.emitComment(
-            f"binary {quad.res} := {quad.arg1} {quad.label} {quad.arg2}"
+            f"binary destino {dst_name} no soportado, valor en {dst_reg}"
         )
+
 
     def lowerReturn(self, quad, mips_emitter):
         if quad.arg1 is not None:
