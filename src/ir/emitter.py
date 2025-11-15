@@ -96,28 +96,29 @@ class Emitter:
         """
         if not self.canLowerField(owner_place, field_label) or not dst_place:
             return None
-        
+
         parsed = self.parseAddress(owner_place)
         if parsed:
             base, idx0 = parsed
         else:
-            # owner simple (ej. t2): tratamos como base + 0
             base, idx0 = owner_place, "0"
 
-        off = str(int(field_label))  # seguro por canLowerField
+        if parsed and base in ("gp", "fp"):
+            t_obj = self.temp_pool.newTemp("ptr")
+            # t_obj := base[idx0]  → t_obj = gp[16] / fp[...]
+            self.emitIndexLoad(t_obj, base, idx0)
+            base, idx0 = t_obj, "0"
 
-        # t_off := 0 + off
+        off = str(int(field_label))
+
         t_off = self.temp_pool.newTemp("int")
         self.emitBinary(t_off, "0", "+", off)
 
-        # t_sum := idx0 + t_off
         t_sum = self.temp_pool.newTemp("int")
         self.emitBinary(t_sum, idx0, "+", t_off)
 
-        # dst := base[t_sum]
         q = self.emit(Op.INDEX_LOAD, arg1=base, arg2=t_sum, res=dst_place)
 
-        # liberar temporales internos
         self.temp_pool.free(t_off, "*")
         self.temp_pool.free(t_sum, "*")
 

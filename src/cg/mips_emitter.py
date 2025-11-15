@@ -1,36 +1,60 @@
+# construcción de .data y .text y escritura del asm
+
 import os
-from logs.logger import log
 
 
 class MipsEmitter:
-    def __init__(self, program_name: str):
+    def __init__(self, program_name):
         self.program_name = program_name
-        self.data_lines: list[str] = []
-        self.text_lines: list[str] = []
-        self.has_text_header = False
+        self.data_lines = []
+        self.text_lines = []
+        self.current_label = None
 
-    def emitData(self, line: str) -> None:
+    def emitData(self, line):
         self.data_lines.append(line)
-        log(f"[data] {line}", channel="cg")
 
-    def emitText(self, line: str) -> None:
-        if not self.has_text_header:
-            self.text_lines.append(".text")
-            self.text_lines.append(".globl main")
-            self.has_text_header = True
+    def emitText(self, line):
         self.text_lines.append(line)
-        log(f"[text] {line}", channel="cg")
 
-    def writeToFile(self, out_dir: str) -> str:
-        asm_path = os.path.join(out_dir, f"{self.program_name}.asm")
-        with open(asm_path, "w", encoding="utf-8") as f:
-            if self.data_lines:
-                f.write(".data\n")
-                for line in self.data_lines:
-                    f.write(line + "\n")
-                f.write("\n")
-            if self.text_lines:
-                for line in self.text_lines:
-                    f.write(line + "\n")
-        log(f"[cg] asm escrito en {asm_path}", channel="cg", force=True)
-        return asm_path
+    def emitInstr(self, op, *operands):
+        # emite una instrucción mips genérica: op dst, src1, src2...
+        if operands:
+            self.text_lines.append(f"{op} " + ", ".join(operands))
+        else:
+            self.text_lines.append(op)
+
+    def emitLabel(self, label):
+        self.text_lines.append(f"{label}:")
+        self.current_label = label
+
+    def emitComment(self, text):
+        self.text_lines.append(f"# {text}")
+
+    def emitJump(self, target):
+        # salto incondicional mips
+        self.text_lines.append(f"j {target}")
+
+    def buildAsm(self):
+        lines = []
+        lines.append("# mips generado por compiscript")
+        lines.append(f"# program: {self.program_name}")
+        lines.append("")
+
+        if self.data_lines:
+            lines.append(".data")
+            lines.extend(self.data_lines)
+            lines.append("")
+
+        lines.append(".text")
+        lines.append(".globl main")
+        lines.extend(self.text_lines)
+        lines.append("")
+        return "\n".join(lines)
+
+    def writeAsm(self, out_dir, stem):
+        os.makedirs(out_dir, exist_ok=True)
+        filename = f"{stem}.asm"
+        path = os.path.join(out_dir, filename)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(self.buildAsm())
+        return path
