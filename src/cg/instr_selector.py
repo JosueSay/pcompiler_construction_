@@ -1,8 +1,5 @@
-# selección de instrucciones mips a partir de quads
-
 from ir.tac import Op
 from logs.logger import log
-
 
 class InstructionSelector:
     def __init__(self, machine_desc, reg_alloc, addr_desc, frame_builder):
@@ -76,6 +73,89 @@ class InstructionSelector:
         # cualquier otra cosa (strings, this, etc.) de momento no la bajamos
         mips_emitter.emitComment(f"origen {src} no soportado en getValueReg")
         return None
+
+    def parseCondition(self, cond_str):
+        """
+        cond_str viene tipo 't4>0', 't4 <= 5', etc.
+        Devuelve (left, op, right).
+        """
+        if cond_str is None:
+            return None, None, None
+
+        s = str(cond_str).replace(" ", "")
+        ops = ["<=", ">=", "==", "!=", "<", ">"]
+
+        for op in ops:
+            idx = s.find(op)
+            if idx != -1:
+                left = s[:idx]
+                right = s[idx + len(op):]
+                return left, op, right
+
+        # fallback: condición simple 't4' => t4 != 0
+        return s, "!=", "0"
+
+    def emitCondBranch(self, cond_txt, target_label, branch_on_true, mips_emitter):
+        """
+        Genera el branch MIPS según la condición:
+        - cond_txt tipo 't4>0', 't4<=5', etc.
+        - branch_on_true = True  => if cond goto label
+        - branch_on_true = False => ifFalse cond goto label
+        """
+        left, op, right = self.parseCondition(cond_txt)
+        if left is None or op is None:
+            mips_emitter.emitComment(f"condición '{cond_txt}' no soportada")
+            return
+
+        # si es ifFalse, invertimos el operador
+        if not branch_on_true:
+            negate = {
+                "==": "!=",
+                "!=": "==",
+                "<":  ">=",
+                "<=": ">",
+                ">":  "<=",
+                ">=": "<",
+            }
+            op = negate.get(op, op)
+
+        # cargar operandos en registros
+        reg_left = self.getValueReg(
+            left,
+            left if self.isTemp(left) else None,
+            mips_emitter,
+        )
+        reg_right = self.getValueReg(
+            right,
+            right if self.isTemp(right) else None,
+            mips_emitter,
+        )
+
+        if reg_left is None or reg_right is None:
+            mips_emitter.emitComment(
+                f"branch sobre '{cond_txt}' no soportado (operandos)"
+            )
+            return
+
+        # mapear operador lógico a instrucción de branch
+        branch_map = {
+            "==": "beq",
+            "!=": "bne",
+            "<":  "blt",
+            "<=": "ble",
+            ">":  "bgt",
+            ">=": "bge",
+        }
+        br_op = branch_map.get(op)
+        if br_op is None:
+            mips_emitter.emitComment(
+                f"operador de condición '{op}' no soportado en branch"
+            )
+            return
+
+        # sintaxis: beq rs, rt, label
+        mips_emitter.emitInstr(br_op, reg_left, reg_right, target_label)
+
 
     def lowerQuad(self, quad, mips_emitter):
         log(f"[CG] lowering quad: {quad}", channel="cg")
@@ -177,17 +257,20 @@ class InstructionSelector:
 
     def lowerGoto(self, quad, mips_emitter):
         target = quad.arg1
-        mips_emitter.emitInstr("j", target)
-
-
+        # usar helper de MipsEmitter
+        mips_emitter.emitJump(target)
 
     def lowerIfGoto(self, quad, mips_emitter):
-        # pendiente: generar rama condicional real
-        mips_emitter.emitComment(f"if {quad.arg1} goto {quad.arg2}")
+        # if <cond> goto <label>
+        cond_txt = quad.arg1
+        target = quad.arg2
+        self.emitCondBranch(cond_txt, target, True, mips_emitter)
 
     def lowerIfFalseGoto(self, quad, mips_emitter):
-        # pendiente: generar rama condicional real
-        mips_emitter.emitComment(f"ifFalse {quad.arg1} goto {quad.arg2}")
+        # ifFalse <cond> goto <label>
+        cond_txt = quad.arg1
+        target = quad.arg2
+        self.emitCondBranch(cond_txt, target, False, mips_emitter)
 
     # ---------- expresiones / datos ----------
 

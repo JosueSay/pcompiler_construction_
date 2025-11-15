@@ -1,6 +1,4 @@
-# activation_records.py (DESPUÉS)
-
-from logs.logger import log  # si no lo tienes ya
+from logs.logger import log
 
 class FrameLayout:
     def __init__(self, func_name, saved_ra_offset=None, saved_fp_offset=None, frame_size=0):
