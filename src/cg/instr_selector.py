@@ -826,10 +826,78 @@ class InstructionSelector:
 
 
     def lowerNewObj(self, quad, mips_emitter):
+        """
+        NEWOBJ dst = newobj ClassName, size:
+          - Por ahora delegamos la reserva real a una rutina de runtime __newobj(size).
+          - __newobj debe:
+              * recibir 'size' (bytes) en stack como único parámetro,
+              * devolver en $v0 un puntero al bloque reservado.
+          - Aquí solo:
+              * preparamos el parámetro (size),
+              * llamamos a __newobj,
+              * dejamos el puntero en 'dst' (temp o gp[...]).
+        """
         dst = quad.res
         class_name = quad.arg1
-        size = quad.arg2
-        # punto inicial para manejar heap y layout de objetos
+        size = quad.arg2 if quad.arg2 is not None else 0
+
         mips_emitter.emitComment(
             f"newobj {dst} = newobj {class_name}, size={size}"
+        )
+
+        # 1) size en un registro
+        size_reg = None
+        if self.isImmediate(size):
+            size_reg = self.reg_alloc.getRegFor(
+                f"{dst}_size" if dst is not None else "newobj_size",
+                self.current_frame,
+                mips_emitter,
+            )
+            mips_emitter.emitInstr("li", size_reg, str(size))
+        else:
+            size_reg = self.getValueReg(size, None, mips_emitter)
+
+        if size_reg is None:
+            mips_emitter.emitComment(
+                f"newobj {dst}: size={size} no soportado (no se llama a __newobj)"
+            )
+            return
+
+        # 2) push del parámetro size
+        mips_emitter.emitInstr("addiu", "$sp", "$sp", "-4")
+        mips_emitter.emitInstr("sw", size_reg, "0($sp)")
+
+        # 3) llamada al runtime allocator
+        mips_emitter.emitInstr("jal", "__newobj")
+
+        # 4) limpiar el parámetro del stack (caller-cleanup)
+        mips_emitter.emitInstr("addiu", "$sp", "$sp", "4")
+
+        # 5) resultado está en $v0
+        ret_reg = self.machine_desc.ret_regs[0]
+
+        if dst is None:
+            # Nada que hacer, puntero queda en $v0
+            mips_emitter.emitComment("newobj sin destino explícito, puntero en $v0")
+            return
+
+        addr_dst = self.parseAddress(dst)
+
+        if addr_dst is not None:
+            # gp[16] := puntero
+            base_reg, offset = addr_dst
+            mips_emitter.emitInstr("sw", ret_reg, f"{offset}({base_reg})")
+            return
+
+        if self.isTemp(dst):
+            # asociar el registro de retorno al temporal dst
+            self.reg_alloc.bindReg(ret_reg, dst)
+            mips_emitter.emitComment(
+                f"newobj: puntero resultado -> temp {dst} en {ret_reg}"
+            )
+            return
+
+        # cualquier otro destino aún no soportado
+        mips_emitter.emitComment(
+            f"newobj destino {dst} no soportado, puntero queda en {ret_reg}"
         )
