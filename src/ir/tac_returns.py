@@ -46,8 +46,9 @@ class TacReturns:
 
         def endReturn(value=None):
             """
-            Emite RETURN en TAC y marca flujo como terminado.
-            NO cierra la función aquí: el epílogo único lo hace TacFunctions.
+            Emite RETURN en TAC y marca el statement como terminador para
+            análisis posteriores (pero NO activa aquí la barrera global
+            del emitter; eso se maneja al cerrar la función).
             """
             pretty_val = value if value is not None else "(no value)"
             log(f"\t[TAC] RETURN {pretty_val}", channel="tac")
@@ -56,9 +57,6 @@ class TacReturns:
                 self.v.emitter.emitReturn()
             else:
                 self.v.emitter.emitReturn(value)
-
-            if hasattr(self.v.emitter, "markFlowTerminated"):
-                self.v.emitter.markFlowTerminated()
 
             self.v.stmt_just_terminated = "return"
             self.v.stmt_just_terminator_node = ctx

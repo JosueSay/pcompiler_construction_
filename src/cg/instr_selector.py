@@ -1,5 +1,6 @@
 from ir.tac import Op
 from logs.logger import log
+from .log_reg import dump_addr_desc, dump_reg_desc
 
 class InstructionSelector:
     
@@ -38,10 +39,50 @@ class InstructionSelector:
         return None
 
     def getValueReg(self, src, dst_hint, mips_emitter):
+        log(f"[getValueReg] IN src={src}, dst_hint={dst_hint}", channel="regalloc")
+
         # src == 'R' significa retorno de función
         if src == "R":
             reg = self.machine_desc.ret_regs[0]
             mips_emitter.emitComment(f"getValueReg: src=R -> {reg}")
+            log(f"[getValueReg] src=R -> reg={reg}", channel="regalloc")
+            return reg
+
+        # 'this' como puntero al objeto actual
+        if isinstance(src, str) and src == "this":
+            this_reg = getattr(self.machine_desc, "this_reg", None)
+            if this_reg is None:
+                mips_emitter.emitComment("getValueReg: 'this' pero machine_desc.this_reg no definido")
+                log("[getValueReg] this_reg no definido", channel="regalloc")
+                return None
+            mips_emitter.emitComment(f"getValueReg: src=this -> {this_reg}")
+            log(f"[getValueReg] src=this -> reg={this_reg}", channel="regalloc")
+            return this_reg
+
+        # gp como puntero global base
+        if isinstance(src, str) and src == "gp":
+            gp_reg = getattr(self.machine_desc, "gp", None)
+            if gp_reg is None:
+                mips_emitter.emitComment("getValueReg: 'gp' pero machine_desc.gp no definido")
+                log("[getValueReg] gp no definido en machine_desc", channel="regalloc")
+                return None
+            mips_emitter.emitComment(f"getValueReg: src=gp -> {gp_reg}")
+            log(f"[getValueReg] src=gp -> reg={gp_reg}", channel="regalloc")
+            return gp_reg
+
+        # literales string: "hola", "texto\n", etc.
+        if isinstance(src, str) and len(src) >= 2 and src[0] == '"' and src[-1] == '"':
+            text = src[1:-1]
+            label = mips_emitter.internString(text)
+            name = dst_hint if dst_hint is not None else label
+            reg = self.reg_alloc.getRegFor(name, self.current_frame, mips_emitter)
+            mips_emitter.emitInstr("la", reg, label)
+            mips_emitter.emitComment(
+                f"getValueReg: src={src} (string) -> {reg} (label={label}, name={name})"
+            )
+            log(f"[getValueReg] STRING src={src} name={name} -> reg={reg}, label={label}",
+                channel="regalloc")
+            dump_reg_desc(self.reg_alloc.reg_desc)
             return reg
 
         # cargar inmediato
@@ -50,6 +91,8 @@ class InstructionSelector:
             reg = self.reg_alloc.getRegFor(name, self.current_frame, mips_emitter)
             mips_emitter.emitInstr("li", reg, str(src))
             mips_emitter.emitComment(f"getValueReg: src={src} (imm) -> {reg} (name={name})")
+            log(f"[getValueReg] IMM src={src} name={name} -> reg={reg}", channel="regalloc")
+            dump_reg_desc(self.reg_alloc.reg_desc)
             return reg
 
         # cargar desde memoria fp[...] o gp[...]
@@ -62,6 +105,10 @@ class InstructionSelector:
             mips_emitter.emitComment(
                 f"getValueReg: src={src} (mem {base_reg}+{offset}) -> {reg} (name={name})"
             )
+            log(f"[getValueReg] MEM src={src} base={base_reg} off={offset} name={name} -> reg={reg}",
+                channel="regalloc")
+            dump_reg_desc(self.reg_alloc.reg_desc)
+            dump_addr_desc(self.reg_alloc.addr_desc)
             return reg
 
         # temporales tN
@@ -70,17 +117,23 @@ class InstructionSelector:
             if regs:
                 reg = regs[0]
                 mips_emitter.emitComment(f"getValueReg: src={src} (temp en reg existente) -> {reg}")
+                log(f"[getValueReg] TEMP {src} ya en reg={reg}", channel="regalloc")
+                dump_reg_desc(self.reg_alloc.reg_desc)
                 return reg
             reg = self.reg_alloc.getRegFor(src, self.current_frame, mips_emitter)
             mips_emitter.emitComment(
                 f"getValueReg: src={src} (temp nuevo) -> {reg} (sin valor inicial)"
             )
+            log(f"[getValueReg] TEMP NUEVO {src} -> reg={reg}", channel="regalloc")
+            dump_reg_desc(self.reg_alloc.reg_desc)
+            dump_addr_desc(self.reg_alloc.addr_desc)
             return reg
 
-        # caso no soportado (strings, this, etc.)
+        # caso no soportado (otros símbolos, etc.)
         mips_emitter.emitComment(f"getValueReg: origen {src} no soportado")
+        log(f"[getValueReg] origen NO SOPORTADO src={src}", channel="regalloc")
         return None
-
+ 
     def parseCondition(self, cond_str):
         # parsear formato tipo 't4>0' o 't4<=5'
         if cond_str is None:
@@ -237,6 +290,14 @@ class InstructionSelector:
 
         # actualizar fp
         mips_emitter.emitInstr("move", "$fp", "$sp")
+        
+        # inicializar 'this' desde el primer parámetro en fp[16]
+        this_reg = getattr(self.machine_desc, "this_reg", None)
+        if this_reg is not None:
+            mips_emitter.emitInstr("lw", this_reg, "16($fp)")
+            mips_emitter.emitComment(
+                f"init this_reg={this_reg} desde fp[16] (convención actual de 'this')"
+            )
 
 
     def lowerLeave(self, quad, mips_emitter):
@@ -312,27 +373,39 @@ class InstructionSelector:
             mips_emitter.emitInstr("li", src_reg, str(src))
 
         else:
-            addr_src = self.parseAddress(src)
-            if addr_src is not None:
-                base_reg, offset = addr_src
-                # si el destino es temp usamos su nombre para el registro
-                reg_name = dst_name if self.isTemp(dst_name) else f"{src}_tmp"
-                src_reg = self.reg_alloc.getRegFor(reg_name, self.current_frame, mips_emitter)
-                mips_emitter.emitInstr("lw", src_reg, f"{offset}({base_reg})")
-
-            elif self.isTemp(src):
-                cand_regs = self.reg_alloc.reg_desc.valueRegs(src)
-                if cand_regs:
-                    src_reg = cand_regs[0]
-                else:
-                    # temp sin registro asignado
-                    src_reg = self.reg_alloc.getRegFor(src, self.current_frame, mips_emitter)
-                    mips_emitter.emitComment(f"valor de {src} no inicializado en registros")
-
+            # literal string en asignación: gp[0] := "texto"
+            if isinstance(src, str) and len(src) >= 2 and src[0] == '"' and src[-1] == '"':
+                text = src[1:-1]
+                label = mips_emitter.internString(text)
+                target_name = dst_name if dst_name is not None else label
+                src_reg = self.reg_alloc.getRegFor(target_name, self.current_frame, mips_emitter)
+                mips_emitter.emitInstr("la", src_reg, label)
+                mips_emitter.emitComment(
+                    f"assign literal string {src} -> {src_reg} (label={label})"
+                )
             else:
-                # caso no soportado (strings, this, etc.)
-                mips_emitter.emitComment(f"assign {dst_name} := {src} (no soportado aún)")
-                return
+                addr_src = self.parseAddress(src)
+                if addr_src is not None:
+                    base_reg, offset = addr_src
+                    # si el destino es temp usamos su nombre para el registro
+                    reg_name = dst_name if self.isTemp(dst_name) else f"{src}_tmp"
+                    src_reg = self.reg_alloc.getRegFor(reg_name, self.current_frame, mips_emitter)
+                    mips_emitter.emitInstr("lw", src_reg, f"{offset}({base_reg})")
+
+                elif self.isTemp(src):
+                    cand_regs = self.reg_alloc.reg_desc.valueRegs(src)
+                    if cand_regs:
+                        src_reg = cand_regs[0]
+                    else:
+                        # temp sin registro asignado
+                        src_reg = self.reg_alloc.getRegFor(src, self.current_frame, mips_emitter)
+                        mips_emitter.emitComment(f"valor de {src} no inicializado en registros")
+
+                else:
+                    # caso no soportado (otros símbolos)
+                    mips_emitter.emitComment(f"assign {dst_name} := {src} (no soportado aún)")
+                    return
+
 
         if dst_name is None:
             return
@@ -373,10 +446,80 @@ class InstructionSelector:
             mips_emitter
         )
 
-
         if reg_left is None or reg_right is None:
-            mips_emitter.emitComment(f"binary {dst_name} := {left} {op} {right} (no soportado)")
+            mips_emitter.emitComment(
+                f"binary {dst_name} := {left} {op} {right} (no soportado: operandos)"
+            )
             return
+
+        # --------- CASO STRINGS (concat "fake" todavía) ---------
+        if (
+            isinstance(left, str) and left.startswith('"') and left.endswith('"')
+        ) or (
+            isinstance(right, str) and right.startswith('"') and right.endswith('"')
+        ):
+            dst_reg = reg_left
+
+            if dst_name is None:
+                mips_emitter.emitComment(
+                    f"binary string {left} {op} {right} -> resultado en {dst_reg} (sin concat real)"
+                )
+                return
+
+            addr_dst = self.parseAddress(dst_name)
+            if addr_dst is not None:
+                dst_base, dst_off = addr_dst
+                mips_emitter.emitInstr("sw", dst_reg, f"{dst_off}({dst_base})")
+                mips_emitter.emitComment(
+                    f"binary string (store) {left} {op} {right} -> {dst_name} via {dst_reg}"
+                )
+                return
+
+            if self.isTemp(dst_name):
+                self.reg_alloc.bindReg(dst_reg, dst_name)
+                mips_emitter.emitComment(
+                    f"binary string (temp) {left} {op} {right} -> {dst_name} en {dst_reg}"
+                )
+                return
+
+            mips_emitter.emitComment(
+                f"binary string destino {dst_name} no soportado, valor en {dst_reg}"
+            )
+            return
+
+        # --------- CASO NUMÉRICO / COMPARACIONES ---------
+
+        # Evitar que left y right usen el MISMO registro físico
+        # salvo que sea el mismo temporal (t0 + t0 es válido).
+        if (
+            reg_right == reg_left
+            and not (self.isTemp(left) and self.isTemp(right) and left == right)
+        ):
+            tmp_name = f"{right}_rhs"
+
+            if self.isImmediate(right):
+                # recargar el inmediato en otro registro
+                reg_right = self.reg_alloc.getRegFor(tmp_name, self.current_frame, mips_emitter)
+                mips_emitter.emitInstr("li", reg_right, str(right))
+
+            elif self.parseAddress(right) is not None:
+                # recargar desde memoria en otro registro
+                base_reg, offset = self.parseAddress(right)
+                reg_right = self.reg_alloc.getRegFor(tmp_name, self.current_frame, mips_emitter)
+                mips_emitter.emitInstr("lw", reg_right, f"{offset}({base_reg})")
+
+            elif self.isTemp(right):
+                # clonar el valor del temp a otro registro
+                src_reg = reg_left  # ya sabemos que estaba allí
+                reg_right = self.reg_alloc.getRegFor(tmp_name, self.current_frame, mips_emitter)
+                if src_reg != reg_right:
+                    mips_emitter.emitInstr("move", reg_right, src_reg)
+
+            else:
+                # caso raro: dejamos comentario pero seguimos
+                mips_emitter.emitComment(
+                    f"binary: left/right comparten reg {reg_left} (caso especial no optimizado)"
+                )
 
         # reutilizamos reg_left como destino físico
         dst_reg = reg_left
@@ -428,7 +571,9 @@ class InstructionSelector:
             return
 
         # destino no soportado
-        mips_emitter.emitComment(f"binary destino {dst_name} no soportado, valor en {dst_reg}")
+        mips_emitter.emitComment(
+            f"binary destino {dst_name} no soportado, valor en {dst_reg}"
+        )
 
 
     def lowerReturn(self, quad, mips_emitter):
@@ -585,17 +730,12 @@ class InstructionSelector:
             mips_emitter.emitComment(f"index_load {dst} := {base}[{idx}] (idx no soportado)")
             return
 
-        word_size = getattr(self.machine_desc, "word_size", 4)
-        # asumimos 4 bytes -> shift de 2
-        shift = 2 if word_size == 4 else 0  # si no es 4, esto habrá que ajustarlo
-
-        # 3) offset = idx * word_size  (idx_scaled)
-        offset_reg = self.reg_alloc.getRegFor(f"{dst}_idx_scaled", self.current_frame, mips_emitter)
+        # En nuestro TAC actual, idx YA es un offset en bytes (0, 8, 12, 20, 16, 24...),
+        # así que no lo escalamos por word_size, solo lo usamos directo.
+        offset_reg = self.reg_alloc.getRegFor(f"{dst}_idx_off", self.current_frame, mips_emitter)
         mips_emitter.emitInstr("move", offset_reg, idx_reg)
-        if shift > 0:
-            mips_emitter.emitInstr("sll", offset_reg, offset_reg, str(shift))
 
-        # 4) addr = base + offset
+        # addr = base + offset
         addr_reg = self.reg_alloc.getRegFor(f"{dst}_addr", self.current_frame, mips_emitter)
         mips_emitter.emitInstr("add", addr_reg, base_reg, offset_reg)
 
@@ -616,6 +756,7 @@ class InstructionSelector:
             return
 
         mips_emitter.emitComment(f"index_load destino {dst} no soportado, valor queda en memoria")
+
 
     def lowerIndexStore(self, quad, mips_emitter):
         base = quad.arg1
@@ -663,16 +804,11 @@ class InstructionSelector:
             mips_emitter.emitComment(f"index_store {base}[{idx}] := {src} (idx no soportado)")
             return
 
-        word_size = getattr(self.machine_desc, "word_size", 4)
-        shift = 2 if word_size == 4 else 0
-
-        # 3) offset = idx * word_size
-        offset_reg = self.reg_alloc.getRegFor(f"{src}_idx_scaled", self.current_frame, mips_emitter)
+        # En nuestro TAC actual, idx es offset en bytes, no índice.
+        offset_reg = self.reg_alloc.getRegFor(f"{src}_idx_off", self.current_frame, mips_emitter)
         mips_emitter.emitInstr("move", offset_reg, idx_reg)
-        if shift > 0:
-            mips_emitter.emitInstr("sll", offset_reg, offset_reg, str(shift))
 
-        # 4) addr = base + offset
+        # addr = base + offset
         addr_reg = self.reg_alloc.getRegFor(f"{src}_addr", self.current_frame, mips_emitter)
         mips_emitter.emitInstr("add", addr_reg, base_reg, offset_reg)
 
@@ -687,6 +823,7 @@ class InstructionSelector:
             return
 
         mips_emitter.emitInstr("sw", src_reg, f"0({addr_reg})")
+
 
     def lowerNewObj(self, quad, mips_emitter):
         dst = quad.res

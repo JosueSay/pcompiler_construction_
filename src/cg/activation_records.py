@@ -32,9 +32,10 @@ class ActivationRecordBuilder:
         func_name = getattr(func_symbol, "name", str(func_symbol))
 
         local_size = 0
-        saved_fp_offset = 0     # [$sp+0] = old $fp
-        saved_ra_offset = 4     # [$sp+4] = $ra
-        frame_size = local_size + 8
+        saved_fp_offset = 0       # fp[0] = old $fp
+        saved_ra_offset = 4       # fp[4] = $ra
+        frame_size = local_size + 16  # reservar 16 bytes mínimos
+
 
         layout = FrameLayout(
             func_name=func_name,

@@ -1,116 +1,47 @@
-class RegisterDescriptor:
-    def __init__(self, regs):
-        # mapa de registros a los valores que contienen
-        self.reg_contents = {reg: set() for reg in regs}
+from logs.logger import log, currentOutDir
+from .machine import MachineDesc
+from .activation_records import ActivationRecordBuilder
+from .descriptors import RegisterDescriptor, AddressDescriptor, RegisterAllocator
+from .instr_selector import InstructionSelector
+from .mips_emitter import MipsEmitter
 
-    def clear(self):
-        # limpia todo el contenido registrado
-        for reg in self.reg_contents:
-            self.reg_contents[reg].clear()
+class CodeGeneratorMips:
+    def __init__(self, program_name, scope_manager, method_registry, class_layout=None):
+        # init componentes principales para el generador
+        self.program_name = program_name
+        self.scope_manager = scope_manager
+        self.method_registry = method_registry
+        self.class_layout = class_layout or {}
 
-    def addContent(self, reg, name):
-        # agrega un valor asociado a un registro
-        self.reg_contents.setdefault(reg, set()).add(name)
+        # setup de descripcion de maquina y estructuras auxiliares
+        self.machine_desc = MachineDesc()
+        self.reg_desc = RegisterDescriptor(self.machine_desc.allRegs())
+        self.addr_desc = AddressDescriptor()
+        self.reg_alloc = RegisterAllocator(self.machine_desc, self.reg_desc, self.addr_desc)
+        self.frame_builder = ActivationRecordBuilder(self.machine_desc, self.scope_manager)
 
-    def removeContent(self, reg, name):
-        if reg in self.reg_contents:
-            # elimina valor si está presente
-            self.reg_contents[reg].discard(name)
+        # instancias para seleccion de instrucciones y emision mips
+        self.mips_emitter = MipsEmitter(program_name)
+        self.instr_selector = InstructionSelector(
+            self.machine_desc,
+            self.reg_alloc,
+            self.addr_desc,
+            self.frame_builder,
+        )
 
-    def valueRegs(self, name):
-        # devuelve los registros que contienen cierto valor
-        result = []
-        for reg, values in self.reg_contents.items():
-            if name in values:
-                result.append(reg)
-        return result
+    def generateFromQuads(self, quads, stem=None):
+        # log inicial para rastrear generacion
+        log("[CG] inicio generateFromQuads", channel="cg")
 
+        # transformar cada quad a instrucciones mips
+        for q in quads:
+            self.instr_selector.lowerQuad(q, self.mips_emitter)
 
-class AddressDescriptor:
-    def __init__(self):
-        # tabla que guarda info por variable
-        self.locations = {}
+        # escribir archivo de salida
+        out_dir = currentOutDir()
+        stem = stem or self.program_name
+        asm_path = self.mips_emitter.writeAsm(out_dir, stem)
 
-    def ensureEntry(self, name):
-        # crea entrada si no existe
-        if name not in self.locations:
-            self.locations[name] = {
-                "regs": set(),
-                "stack_offset": None,
-                "global_name": None,
-            }
-
-    def setStackOffset(self, name, offset):
-        # registra el offset de stack para la variable
-        self.ensureEntry(name)
-        self.locations[name]["stack_offset"] = offset
-
-    def addReg(self, name, reg):
-        # agrega referencia a registro
-        self.ensureEntry(name)
-        self.locations[name]["regs"].add(reg)
-
-    def removeReg(self, name, reg):
-        # elimina referencia a registro
-        self.ensureEntry(name)
-        self.locations[name]["regs"].discard(reg)
-
-    def setGlobal(self, name, global_name):
-        # marca nombre global asociado
-        self.ensureEntry(name)
-        self.locations[name]["global_name"] = global_name
-
-    def getInfo(self, name):
-        # devuelve info de la variable
-        self.ensureEntry(name)
-        return self.locations[name]
-
-
-class RegisterAllocator:
-    def __init__(self, machine_desc, reg_desc, addr_desc):
-        self.machine_desc = machine_desc
-        self.reg_desc = reg_desc
-        self.addr_desc = addr_desc
-
-    def getRegFor(self, name, current_frame, mips_emitter):
-        # busca un registro libre
-        regs = self.machine_desc.allRegs()
-
-        for reg in regs:
-            if not self.reg_desc.reg_contents[reg]:
-                # registro libre encontrado
-                self.bindReg(reg, name)
-                return reg
-
-        # si no hay libres, elegimos víctima
-        victim = regs[0]
-        self.spillReg(victim, current_frame, mips_emitter)
-        self.bindReg(victim, name)
-        return victim
-
-    def bindReg(self, reg, name):
-        # desvincula contenido previo del registro
-        for val in list(self.reg_desc.reg_contents[reg]):
-            self.addr_desc.removeReg(val, reg)
-            self.reg_desc.removeContent(reg, val)
-
-        # asocia registro con nuevo valor
-        self.reg_desc.addContent(reg, name)
-        self.addr_desc.addReg(name, reg)
-
-    def spillReg(self, reg, current_frame, mips_emitter):
-        """
-        Vuelca el contenido del registro a memoria si la variable tiene offset.
-        Usa $fp como base (modelo clásico de frame).
-        """
-        values = list(self.reg_desc.reg_contents[reg])
-        for name in values:
-            info = self.addr_desc.getInfo(name)
-            offset = info["stack_offset"]
-            if offset is not None:
-                # sw reg, offset($fp)
-                mips_emitter.emitInstr("sw", reg, f"{offset}({self.machine_desc.fp})")
-            # si no hay offset, solo quitamos la asociación de registro
-            self.addr_desc.removeReg(name, reg)
-
-        self.reg_desc.reg_contents[reg].clear()
+        # log final con ruta generada
+        log(f"[CG] fin generateFromQuads -> {asm_path}", channel="cg")
+        return asm_path
