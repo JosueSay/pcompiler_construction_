@@ -197,8 +197,32 @@ class InstructionSelector:
             mips_emitter.emitComment(f"emitCondBranch: negando operador {old_op} -> {op}")
 
         # cargar operandos en registros (camino genérico)
-        reg_left = self.getValueReg(left, left if self.isTemp(left) else None, mips_emitter)
-        reg_right = self.getValueReg(right, right if self.isTemp(right) else None, mips_emitter)
+        if self.isImmediate(right) and not self.isImmediate(left):
+            # LEFT primero, usando hint si es temp
+            reg_left = self.getValueReg(
+                left,
+                left if self.isTemp(left) else None,
+                mips_emitter
+            )
+
+            # RIGHT inmediato → forzamos $at para no pisar left
+            reg_right = "$at"
+            mips_emitter.emitComment(
+                f"emitCondBranch: right inmediato {right} -> {reg_right} (no pisa left)"
+            )
+            mips_emitter.emitInstr("li", reg_right, str(right))
+        else:
+            # camino genérico
+            reg_left = self.getValueReg(
+                left,
+                left if self.isTemp(left) else None,
+                mips_emitter
+            )
+            reg_right = self.getValueReg(
+                right,
+                right if self.isTemp(right) else None,
+                mips_emitter
+            )
 
         mips_emitter.emitComment(
             f"emitCondBranch: regs -> left={left} en {reg_left}, right={right} en {reg_right}"
@@ -434,19 +458,36 @@ class InstructionSelector:
 
         # =========================
         # 1) OBTENER REGISTROS
-        #    → primero RIGHT, luego LEFT
+        #    → evitamos que un inmediato en 'right'
+        #      pise el registro de 'left'
         # =========================
-        reg_right = self.getValueReg(
-            right,
-            right if self.isTemp(right) else None,
-            mips_emitter
-        )
+        if self.isImmediate(right) and not self.isImmediate(left):
+            # Primero cargamos LEFT, usando dst_name como hint
+            reg_left = self.getValueReg(
+                left,
+                left if self.isTemp(left) else dst_name,
+                mips_emitter
+            )
 
-        reg_left = self.getValueReg(
-            left,
-            left if self.isTemp(left) else dst_name,
-            mips_emitter
-        )
+            # RIGHT es inmediato: siempre lo cargamos en $at
+            reg_right = "$at"
+            mips_emitter.emitComment(
+                f"lowerBinary: right inmediato {right} -> {reg_right} (no pisa left)"
+            )
+            mips_emitter.emitInstr("li", reg_right, str(right))
+        else:
+            # Camino genérico
+            reg_right = self.getValueReg(
+                right,
+                right if self.isTemp(right) else None,
+                mips_emitter
+            )
+
+            reg_left = self.getValueReg(
+                left,
+                left if self.isTemp(left) else dst_name,
+                mips_emitter
+            )
 
         if reg_left is None or reg_right is None:
             mips_emitter.emitComment(
@@ -454,7 +495,6 @@ class InstructionSelector:
             )
             return
 
-        # Pequeño comentario para debug
         mips_emitter.emitComment(
             f"lowerBinary: left={left}({reg_left}), right={right}({reg_right}), op={op}"
         )
