@@ -95,23 +95,47 @@ class RegisterAllocator:
         self.addr_desc = addr_desc
         log("[RegisterAllocator.__init__]", channel="regalloc")
 
+
+    def _is_temp_name(self, name):
+        return (
+            isinstance(name, str)
+            and name.startswith("t")
+            and name[1:].isdigit()
+        )
+
     def getRegFor(self, name, current_frame, mips_emitter):
-        # busca un registro libre
         regs = self.machine_desc.allRegs()
         log(f"[RegisterAllocator.getRegFor] pedir reg para name={name}, regs={regs}",
             channel="regalloc")
         dump_reg_desc(self.reg_desc)
 
-        # busca un registro libre
+        # 1) primero: buscar un registro totalmente libre
         for reg in regs:
             if not self.reg_desc.reg_contents[reg]:
-                # registro libre encontrado
                 self.bindReg(reg, name)
                 dump_reg_desc(self.reg_desc)
                 dump_addr_desc(self.addr_desc)
                 return reg
 
-        # si no hay libres, elegimos víctima
+        # 2) no hay registros libres.
+        #    Si 'name' ES un temp tN, intentamos NO matar otros temps tK.
+        if self._is_temp_name(name):
+            for reg in regs:
+                vals = self.reg_desc.reg_contents[reg]
+                # ¿este reg sólo tiene valores que NO son temps tN?
+                if all(not self._is_temp_name(v) for v in vals):
+                    log(f"[RegisterAllocator.getRegFor] victim (no temp)={reg} para {name}",
+                        channel="regalloc")
+                    self.spillReg(reg, current_frame, mips_emitter)
+                    self.bindReg(reg, name)
+                    dump_reg_desc(self.reg_desc)
+                    dump_addr_desc(self.addr_desc)
+                    return reg
+
+            log("[RegisterAllocator.getRegFor] TODOS los regs tienen temps; usando victim[0]",
+                channel="regalloc")
+
+        # 3) caso general (no es temp, o ya no hay opción mejor):
         victim = regs[0]
         log(f"[RegisterAllocator.getRegFor] no libres, victim={victim} para {name}",
             channel="regalloc")
@@ -120,6 +144,7 @@ class RegisterAllocator:
         dump_reg_desc(self.reg_desc)
         dump_addr_desc(self.addr_desc)
         return victim
+
 
     def bindReg(self, reg, name):
         log(f"[RegisterAllocator.bindReg] bind {name} -> {reg}", channel="regalloc")
