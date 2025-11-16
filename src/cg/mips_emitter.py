@@ -8,6 +8,11 @@ class MipsEmitter:
         self.text_lines = []
         self.current_label = None
 
+        # pool de strings
+        self.string_pool = {}     # text -> label
+        self.data_strings = []    # lista de (label, text)
+        self.string_counter = 0
+
     def emitData(self, line):
         # agrega una línea a la sección .data
         self.data_lines.append(line)
@@ -36,6 +41,24 @@ class MipsEmitter:
         # salto incondicional mips
         self.text_lines.append(f"j {target}")
 
+    # ---------- soporte para literales de string ----------
+
+    def internString(self, text: str) -> str:
+        """
+        Devuelve una etiqueta para el literal de texto.
+        Si ya existe, la reutiliza.
+        """
+        if text in self.string_pool:
+            return self.string_pool[text]
+
+        label = f"__str_{self.string_counter}"
+        self.string_counter += 1
+        self.string_pool[text] = label
+        self.data_strings.append((label, text))
+        return label
+
+    # ---------- construcción y escritura del ASM ----------
+
     def buildAsm(self):
         # construye el texto final del asm en orden: metadata, .data, .text
         lines = []
@@ -43,9 +66,18 @@ class MipsEmitter:
         lines.append(f"# program: {self.program_name}")
         lines.append("")
 
-        if self.data_lines:
+        if self.data_lines or self.data_strings:
             lines.append(".data")
+            # primero cualquier línea .data explícita
             lines.extend(self.data_lines)
+            # luego los literales de string
+            for label, text in self.data_strings:
+                esc = (
+                    text.replace("\\", "\\\\")
+                        .replace("\"", "\\\"")
+                        .replace("\n", "\\n")
+                )
+                lines.append(f"{label}: .asciiz \"{esc}\"")
             lines.append("")
 
         lines.append(".text")

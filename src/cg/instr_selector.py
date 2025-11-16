@@ -534,15 +534,159 @@ class InstructionSelector:
         dst = quad.res
         base = quad.arg1
         idx = quad.arg2
-        # por ahora solo dejamos trazabilidad; luego vendrá el lw con dirección calculada
-        mips_emitter.emitComment(f"index_load {dst} := {base}[{idx}]")
+
+        # Caso especial: sin índice -> equivale a un load simple
+        if idx is None:
+            addr = self.parseAddress(base)
+            if addr is None:
+                mips_emitter.emitComment(f"index_load {dst} := {base} (sin idx, base no soportada)")
+                return
+
+            base_reg, offset = addr
+
+            # destino en registro o en memoria
+            addr_dst = self.parseAddress(dst)
+            if addr_dst is not None:
+                # mem <- mem (necesita reg intermedio)
+                tmp_reg = self.reg_alloc.getRegFor(f"{dst}_tmp", self.current_frame, mips_emitter)
+                mips_emitter.emitInstr("lw", tmp_reg, f"{offset}({base_reg})")
+                dst_base, dst_off = addr_dst
+                mips_emitter.emitInstr("sw", tmp_reg, f"{dst_off}({dst_base})")
+                return
+
+            if self.isTemp(dst):
+                dst_reg = self.reg_alloc.getRegFor(dst, self.current_frame, mips_emitter)
+                mips_emitter.emitInstr("lw", dst_reg, f"{offset}({base_reg})")
+                self.reg_alloc.bindReg(dst_reg, dst)
+                return
+
+            mips_emitter.emitComment(f"index_load destino {dst} no soportado")
+            return
+
+        # ----------- Caso general: base[idx] -----------
+
+        # 1) registro base
+        if isinstance(base, str) and base == "this":
+            # asumimos que el descriptor de máquina tiene this_reg
+            base_reg = getattr(self.machine_desc, "this_reg", None)
+            if base_reg is None:
+                mips_emitter.emitComment("index_load con 'this' pero machine_desc.this_reg no definido")
+                return
+        else:
+            base_reg = self.getValueReg(base, base if self.isTemp(base) else None, mips_emitter)
+
+        if base_reg is None:
+            mips_emitter.emitComment(f"index_load {dst} := {base}[{idx}] (base no soportada)")
+            return
+
+        # 2) registro índice
+        idx_reg = self.getValueReg(idx, None, mips_emitter)
+        if idx_reg is None:
+            mips_emitter.emitComment(f"index_load {dst} := {base}[{idx}] (idx no soportado)")
+            return
+
+        word_size = getattr(self.machine_desc, "word_size", 4)
+        # asumimos 4 bytes -> shift de 2
+        shift = 2 if word_size == 4 else 0  # si no es 4, esto habrá que ajustarlo
+
+        # 3) offset = idx * word_size  (idx_scaled)
+        offset_reg = self.reg_alloc.getRegFor(f"{dst}_idx_scaled", self.current_frame, mips_emitter)
+        mips_emitter.emitInstr("move", offset_reg, idx_reg)
+        if shift > 0:
+            mips_emitter.emitInstr("sll", offset_reg, offset_reg, str(shift))
+
+        # 4) addr = base + offset
+        addr_reg = self.reg_alloc.getRegFor(f"{dst}_addr", self.current_frame, mips_emitter)
+        mips_emitter.emitInstr("add", addr_reg, base_reg, offset_reg)
+
+        # 5) cargar en destino
+        addr_dst = self.parseAddress(dst)
+        if addr_dst is not None:
+            # mem <- *(base+idx*4) usando reg temporal
+            tmp_reg = self.reg_alloc.getRegFor(f"{dst}_tmp", self.current_frame, mips_emitter)
+            mips_emitter.emitInstr("lw", tmp_reg, f"0({addr_reg})")
+            dst_base, dst_off = addr_dst
+            mips_emitter.emitInstr("sw", tmp_reg, f"{dst_off}({dst_base})")
+            return
+
+        if self.isTemp(dst):
+            dst_reg = self.reg_alloc.getRegFor(dst, self.current_frame, mips_emitter)
+            mips_emitter.emitInstr("lw", dst_reg, f"0({addr_reg})")
+            self.reg_alloc.bindReg(dst_reg, dst)
+            return
+
+        mips_emitter.emitComment(f"index_load destino {dst} no soportado, valor queda en memoria")
 
     def lowerIndexStore(self, quad, mips_emitter):
         base = quad.arg1
         idx = quad.arg2 if quad.arg2 is not None else quad.label
         src = quad.res
-        # solo comentario por ahora; el sw real se generará más adelante
-        mips_emitter.emitComment(f"index_store {base}[{idx}] := {src}")
+
+        # Caso especial: sin índice -> equivale a store simple
+        if idx is None:
+            addr = self.parseAddress(base)
+            if addr is None:
+                mips_emitter.emitComment(f"index_store {base} := {src} (sin idx, base no soportada)")
+                return
+
+            base_reg, offset = addr
+            src_reg = self.getValueReg(
+                src,
+                src if self.isTemp(src) else None,
+                mips_emitter
+            )
+            if src_reg is None:
+                mips_emitter.emitComment(f"index_store {base} := {src} (src no soportado)")
+                return
+
+            mips_emitter.emitInstr("sw", src_reg, f"{offset}({base_reg})")
+            return
+
+        # ----------- Caso general: base[idx] := src -----------
+
+        # 1) registro base
+        if isinstance(base, str) and base == "this":
+            base_reg = getattr(self.machine_desc, "this_reg", None)
+            if base_reg is None:
+                mips_emitter.emitComment("index_store con 'this' pero machine_desc.this_reg no definido")
+                return
+        else:
+            base_reg = self.getValueReg(base, base if self.isTemp(base) else None, mips_emitter)
+
+        if base_reg is None:
+            mips_emitter.emitComment(f"index_store {base}[{idx}] := {src} (base no soportada)")
+            return
+
+        # 2) registro índice
+        idx_reg = self.getValueReg(idx, None, mips_emitter)
+        if idx_reg is None:
+            mips_emitter.emitComment(f"index_store {base}[{idx}] := {src} (idx no soportado)")
+            return
+
+        word_size = getattr(self.machine_desc, "word_size", 4)
+        shift = 2 if word_size == 4 else 0
+
+        # 3) offset = idx * word_size
+        offset_reg = self.reg_alloc.getRegFor(f"{src}_idx_scaled", self.current_frame, mips_emitter)
+        mips_emitter.emitInstr("move", offset_reg, idx_reg)
+        if shift > 0:
+            mips_emitter.emitInstr("sll", offset_reg, offset_reg, str(shift))
+
+        # 4) addr = base + offset
+        addr_reg = self.reg_alloc.getRegFor(f"{src}_addr", self.current_frame, mips_emitter)
+        mips_emitter.emitInstr("add", addr_reg, base_reg, offset_reg)
+
+        # 5) valor a guardar
+        src_reg = self.getValueReg(
+            src,
+            src if self.isTemp(src) else None,
+            mips_emitter
+        )
+        if src_reg is None:
+            mips_emitter.emitComment(f"index_store {base}[{idx}] := {src} (src no soportado)")
+            return
+
+        mips_emitter.emitInstr("sw", src_reg, f"0({addr_reg})")
 
     def lowerNewObj(self, quad, mips_emitter):
         dst = quad.res

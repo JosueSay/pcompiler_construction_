@@ -7,19 +7,15 @@ class FrameLayout:
         # tamaño total del frame (en bytes)
         self.frame_size = frame_size
 
-        # tablas de offsets
-        self.param_offsets = {}
-        self.local_offsets = {}
-        self.temp_offsets = {}
-        self.saved_reg_offsets = {}
+        # tablas de offsets (relativos a $fp una vez hecho el prólogo)
+        self.param_offsets = {}    # nombre_param -> offset
+        self.local_offsets = {}    # nombre_local -> offset
+        self.temp_offsets = {}     # nombre_temp -> offset
+        self.saved_reg_offsets = {}  # reg -> offset
 
         # offsets relativos a $sp al inicio del frame
         self.saved_ra_offset = saved_ra_offset
         self.saved_fp_offset = saved_fp_offset
-
-        # si quieres mantener compatibilidad con nombres antiguos:
-        self.return_addr_offset = saved_ra_offset
-        self.old_fp_offset = saved_fp_offset
 
 
 class ActivationRecordBuilder:
@@ -28,14 +24,16 @@ class ActivationRecordBuilder:
         self.scope_manager = scope_manager
 
     def buildForFunction(self, func_symbol):
-        # por ahora no calculamos locales, solo el espacio mínimo:
-        #  - 4 bytes para $fp guardado
-        #  - 4 bytes para $ra guardado
+        """
+        De momento: frame mínimo
+          - 4 bytes para $fp guardado
+          - 4 bytes para $ra guardado
+        """
         func_name = getattr(func_symbol, "name", str(func_symbol))
 
         local_size = 0
-        saved_fp_offset = 0
-        saved_ra_offset = 4
+        saved_fp_offset = 0     # [$sp+0] = old $fp
+        saved_ra_offset = 4     # [$sp+4] = $ra
         frame_size = local_size + 8
 
         layout = FrameLayout(
@@ -44,7 +42,11 @@ class ActivationRecordBuilder:
             saved_fp_offset=saved_fp_offset,
             frame_size=frame_size,
         )
-        log(f"[cg] frame layout for {func_name}: frame_size={frame_size}, "
-            f"saved_ra_offset={saved_ra_offset}, saved_fp_offset={saved_fp_offset}",
-            channel="cg")
+
+        log(
+            f"[cg] frame layout for {func_name}: "
+            f"frame_size={frame_size}, saved_ra_offset={saved_ra_offset}, "
+            f"saved_fp_offset={saved_fp_offset}",
+            channel="cg"
+        )
         return layout
