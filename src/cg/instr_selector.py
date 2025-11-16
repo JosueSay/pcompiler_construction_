@@ -426,23 +426,25 @@ class InstructionSelector:
         # destino no soportado
         mips_emitter.emitComment(f"assign destino {dst_name} no soportado, valor en {src_reg}")
 
-
     def lowerBinary(self, quad, mips_emitter):
         dst_name = quad.res
         op = quad.label
         left = quad.arg1
         right = quad.arg2
 
-        # obtener regs para los operandos
-        reg_left = self.getValueReg(
-            left,
-            left if self.isTemp(left) else dst_name,
+        # =========================
+        # 1) OBTENER REGISTROS
+        #    → primero RIGHT, luego LEFT
+        # =========================
+        reg_right = self.getValueReg(
+            right,
+            right if self.isTemp(right) else None,
             mips_emitter
         )
 
-        reg_right = self.getValueReg(
-            right,
-            None,
+        reg_left = self.getValueReg(
+            left,
+            left if self.isTemp(left) else dst_name,
             mips_emitter
         )
 
@@ -451,6 +453,11 @@ class InstructionSelector:
                 f"binary {dst_name} := {left} {op} {right} (no soportado: operandos)"
             )
             return
+
+        # Pequeño comentario para debug
+        mips_emitter.emitComment(
+            f"lowerBinary: left={left}({reg_left}), right={right}({reg_right}), op={op}"
+        )
 
         # --------- CASO STRINGS (concat "fake" todavía) ---------
         if (
@@ -495,31 +502,36 @@ class InstructionSelector:
             reg_right == reg_left
             and not (self.isTemp(left) and self.isTemp(right) and left == right)
         ):
-            tmp_name = f"{right}_rhs"
+            # Usamos un registro de hardware que el allocator NO usa ($at)
+            scratch = "$at"
+            mips_emitter.emitComment(
+                f"binary: left/right comparten {reg_left}, forzando right en {scratch}"
+            )
 
             if self.isImmediate(right):
-                # recargar el inmediato en otro registro
-                reg_right = self.reg_alloc.getRegFor(tmp_name, self.current_frame, mips_emitter)
+                # right es un inmediato: recargar en $at
+                reg_right = scratch
                 mips_emitter.emitInstr("li", reg_right, str(right))
 
-            elif self.parseAddress(right) is not None:
-                # recargar desde memoria en otro registro
-                base_reg, offset = self.parseAddress(right)
-                reg_right = self.reg_alloc.getRegFor(tmp_name, self.current_frame, mips_emitter)
-                mips_emitter.emitInstr("lw", reg_right, f"{offset}({base_reg})")
-
-            elif self.isTemp(right):
-                # clonar el valor del temp a otro registro
-                src_reg = reg_left  # ya sabemos que estaba allí
-                reg_right = self.reg_alloc.getRegFor(tmp_name, self.current_frame, mips_emitter)
-                if src_reg != reg_right:
-                    mips_emitter.emitInstr("move", reg_right, src_reg)
-
             else:
-                # caso raro: dejamos comentario pero seguimos
-                mips_emitter.emitComment(
-                    f"binary: left/right comparten reg {reg_left} (caso especial no optimizado)"
-                )
+                addr_right = self.parseAddress(right)
+                if addr_right is not None:
+                    # right es algo tipo fp[...] / gp[...] : recargar desde memoria en $at
+                    base_reg, offset = addr_right
+                    reg_right = scratch
+                    mips_emitter.emitInstr("lw", reg_right, f"{offset}({base_reg})")
+
+                elif self.isTemp(right):
+                    # right es un temp distinto a left pero quedó en el mismo reg.
+                    # (si el allocator lo hace, al menos separamos en scratch)
+                    reg_right = scratch
+                    mips_emitter.emitInstr("move", reg_right, reg_left)
+
+                else:
+                    # Caso raro: símbolo no soportado; dejamos comentario.
+                    mips_emitter.emitComment(
+                        f"binary: right={right} con reg compartido {reg_left}, caso no soportado"
+                    )
 
         # reutilizamos reg_left como destino físico
         dst_reg = reg_left
@@ -574,6 +586,8 @@ class InstructionSelector:
         mips_emitter.emitComment(
             f"binary destino {dst_name} no soportado, valor en {dst_reg}"
         )
+
+
 
 
     def lowerReturn(self, quad, mips_emitter):

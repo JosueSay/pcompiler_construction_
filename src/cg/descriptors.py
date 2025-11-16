@@ -143,17 +143,27 @@ class RegisterAllocator:
 
         for name in values:
             info = self.addr_desc.getInfo(name)
+            regs_for_name = info["regs"]
             offset = info["stack_offset"]
+
+            # si tenemos offset, sí guardamos a stack
             if offset is not None:
-                # sw reg, offset($fp)
                 mips_emitter.emitInstr("sw", reg, f"{offset}({self.machine_desc.fp})")
-                log(f"[RegisterAllocator.spillReg]   sw {reg},{offset}({self.machine_desc.fp}) "
-                    f"para {name}", channel="regalloc")
+                log(
+                    f"[RegisterAllocator.spillReg]   sw {reg},{offset}({self.machine_desc.fp}) para {name}",
+                    channel="regalloc"
+                )
             else:
-                log(f"[RegisterAllocator.spillReg]   {name} sin offset, solo se quita del reg",
-                    channel="regalloc")
+                # de momento, mismo comportamiento que antes: solo se quita del reg
+                log(
+                    f"[RegisterAllocator.spillReg]   {name} sin stack_offset, solo se quita de {reg}",
+                    channel="regalloc"
+                )
+
+            # en todos los casos, quitar el reg de la lista de ese nombre
             self.addr_desc.removeReg(name, reg)
 
+        # limpiar el registro en el descriptor
         self.reg_desc.reg_contents[reg].clear()
         dump_reg_desc(self.reg_desc)
         dump_addr_desc(self.addr_desc)
