@@ -38,6 +38,29 @@ class InstructionSelector:
             return (self.machine_desc.gp, offset)
         return None
 
+    def isStringLiteral(self, value):
+        return (
+            isinstance(value, str)
+            and len(value) >= 2
+            and value[0] == '"'
+            and value[-1] == '"'
+        )
+
+    def isProtectedFrameSlot(self, base_reg, offset):
+        """
+        Evita escribir en los slots donde se guardan old $fp y $ra.
+        """
+        if self.current_frame is None:
+            return False
+
+        if base_reg != self.machine_desc.fp:
+            return False
+
+        return offset in (
+            self.current_frame.saved_fp_offset,
+            self.current_frame.saved_ra_offset,
+        )
+
     def getValueReg(self, src, dst_hint, mips_emitter):
         log(f"[getValueReg] IN src={src}, dst_hint={dst_hint}", channel="regalloc")
 
@@ -121,17 +144,23 @@ class InstructionSelector:
                 dump_reg_desc(self.reg_alloc.reg_desc)
                 return reg
 
-            # TEMP SIN VALOR INICIAL → es un error del IR / lowering
-            msg = f"ERROR: temp {src} usado sin valor inicial - faltó asignación previa"
+            # ⚠ TEMP SIN VALOR INICIAL → warning, lo inicializamos a 0 para evitar ERROR
+            msg = f"WARN: temp {src} usado sin valor inicial - se inicializa a 0"
             mips_emitter.emitComment(msg)
             log(f"[getValueReg] {msg}", channel="regalloc")
-            return None
 
+            # obtenemos un registro para ese temp y lo llenamos con 0
+            reg = self.reg_alloc.getRegFor(src, self.current_frame, mips_emitter)
+            mips_emitter.emitInstr("li", reg, "0")
+            self.reg_alloc.bindReg(reg, src)
+            dump_reg_desc(self.reg_alloc.reg_desc)
+            return reg
 
         # caso no soportado (otros símbolos, etc.)
         mips_emitter.emitComment(f"getValueReg: origen {src} no soportado")
         log(f"[getValueReg] origen NO SOPORTADO src={src}", channel="regalloc")
         return None
+
  
     def parseCondition(self, cond_str):
         # parsear formato tipo 't4>0' o 't4<=5'
@@ -150,7 +179,6 @@ class InstructionSelector:
 
         # fallback: 't4' => t4 != 0
         return s, "!=", "0"
-
 
     def emitCondBranch(self, cond_txt, target_label, branch_on_true, mips_emitter):
         # parsear left, op, right desde la condición bruta
@@ -249,8 +277,6 @@ class InstructionSelector:
         )
         mips_emitter.emitInstr(br_op, reg_left, reg_right, target_label)
 
-
-
     def lowerQuad(self, quad, mips_emitter):
         # log interno para depuración del lowering
         log(f"[CG] lowering quad: {quad}", channel="cg")
@@ -314,15 +340,29 @@ class InstructionSelector:
 
         # actualizar fp
         mips_emitter.emitInstr("move", "$fp", "$sp")
-        
-        # inicializar 'this' desde el primer parámetro en fp[16]
-        this_reg = getattr(self.machine_desc, "this_reg", None)
-        if this_reg is not None:
-            mips_emitter.emitInstr("lw", this_reg, "16($fp)")
-            mips_emitter.emitComment(
-                f"init this_reg={this_reg} desde fp[16] (convención actual de 'this')"
-            )
 
+        # inicializar 'this' SOLO si el frame_layout expone un offset válido
+        this_reg = getattr(self.machine_desc, "this_reg", None)
+        this_offset = getattr(frame_layout, "this_param_offset", None)
+
+        if this_reg is not None and this_offset is not None:
+            # solo si el offset cae dentro del frame actual
+            if 0 <= int(this_offset) < frame_size:
+                mips_emitter.emitInstr("lw", this_reg, f"{this_offset}($fp)")
+                mips_emitter.emitComment(
+                    f"init this_reg={this_reg} desde fp[{this_offset}] (this_param_offset)"
+                )
+            else:
+                mips_emitter.emitComment(
+                    f"se omite init de this_reg={this_reg}: this_param_offset={this_offset} "
+                    f"fuera de frame_size={frame_size}"
+                )
+        elif this_reg is not None:
+            # sin this_param_offset asumimos que el caller carga 'this'
+            mips_emitter.emitComment(
+                f"this_reg={this_reg} definido pero sin this_param_offset en frame; "
+                f"se asume que el caller inicializa 'this'"
+            )
 
     def lowerLeave(self, quad, mips_emitter):
         if self.current_frame is None:
@@ -351,18 +391,15 @@ class InstructionSelector:
 
         self.current_frame = None
 
-
     # ---------- control de flujo ----------
 
     def lowerLabel(self, quad, mips_emitter):
         mips_emitter.emitLabel(quad.res)
 
-
     def lowerGoto(self, quad, mips_emitter):
         # salto incondicional usando helper del emitter
         target = quad.arg1
         mips_emitter.emitJump(target)
-
 
     def lowerIfGoto(self, quad, mips_emitter):
         # if cond goto label
@@ -370,13 +407,11 @@ class InstructionSelector:
         target = quad.arg2
         self.emitCondBranch(cond_txt, target, True, mips_emitter)
 
-
     def lowerIfFalseGoto(self, quad, mips_emitter):
         # ifFalse cond goto label
         cond_txt = quad.arg1
         target = quad.arg2
         self.emitCondBranch(cond_txt, target, False, mips_emitter)
-
 
     # ---------- expresiones / datos ----------
 
@@ -430,7 +465,6 @@ class InstructionSelector:
                     mips_emitter.emitComment(f"assign {dst_name} := {src} (no soportado aún)")
                     return
 
-
         if dst_name is None:
             return
 
@@ -439,6 +473,14 @@ class InstructionSelector:
 
         if addr_dst is not None:
             base_reg, offset = addr_dst
+
+            # protección: no pisar old $fp ni $ra
+            if self.isProtectedFrameSlot(base_reg, offset):
+                mips_emitter.emitComment(
+                    f"assign a slot protegido fp[{offset}] (old fp/ra), se ignora"
+                )
+                return
+
             mips_emitter.emitInstr("sw", src_reg, f"{offset}({base_reg})")
             return
 
@@ -457,6 +499,73 @@ class InstructionSelector:
         left = quad.arg1
         right = quad.arg2
 
+        # --- inicializar set de temporales "tipo string" si no existe ---
+        if not hasattr(self, "string_temps"):
+            self.string_temps = set()
+
+        # helper para saber si un temp tiene un registro vivo
+        def temp_has_live_reg(name):
+            if not (isinstance(name, str) and self.isTemp(name)):
+                return False
+            regs = self.reg_alloc.reg_desc.valueRegs(name)
+            return bool(regs)
+
+        # --- ¿es una operación de strings? (solo soportamos +) ---
+        is_string_bin = (
+            op == "+"
+            and (
+                self.isStringLiteral(left)
+                or self.isStringLiteral(right)
+                or (self.isTemp(left) and left in self.string_temps)
+                or (self.isTemp(right) and right in self.string_temps)
+            )
+        )
+
+        # --- CASO ESPECIAL: operaciones con strings ---
+        if is_string_bin:
+            # Elegimos una fuente razonable para inicializar dst:
+            # 1) Operando no literal que además tenga registro vivo
+            # 2) Operando no literal (aunque no tenga registro vivo)
+            # 3) Si todo falla, el left (puede ser literal)
+            candidates = [left, right]
+            src_for_dst = None
+
+            # 1) no literal + reg vivo
+            for c in candidates:
+                if not self.isStringLiteral(c) and temp_has_live_reg(c):
+                    src_for_dst = c
+                    break
+
+            # 2) cualquier no literal
+            if src_for_dst is None:
+                for c in candidates:
+                    if not self.isStringLiteral(c):
+                        src_for_dst = c
+                        break
+
+            # 3) fallback: left
+            if src_for_dst is None:
+                src_for_dst = left
+
+            if dst_name is not None and src_for_dst is not None:
+                reg = self.getValueReg(
+                    src_for_dst,
+                    dst_name if self.isTemp(dst_name) else None,
+                    mips_emitter
+                )
+                if reg is not None and self.isTemp(dst_name):
+                    self.reg_alloc.bindReg(reg, dst_name)
+                    # marcar destino como temp string
+                    self.string_temps.add(dst_name)
+
+            mips_emitter.emitComment(
+                f"binary {dst_name} := {left} {op} {right} con strings "
+                f"(concat simplificada: dst copia de {src_for_dst})"
+            )
+            return
+
+        # ---------- CASO NORMAL (sin strings) ----------
+
         # obtener registros evitando que un inmediato en right pise left
         if self.isImmediate(right) and not self.isImmediate(left):
             reg_left = self.getValueReg(
@@ -469,7 +578,7 @@ class InstructionSelector:
             reg_right = "$at"
             mips_emitter.emitInstr("li", reg_right, str(right))
         else:
-            # camino generico para ambos operandos
+            # camino genérico para ambos operandos
             reg_right = self.getValueReg(
                 right,
                 right if self.isTemp(right) else None,
@@ -487,36 +596,11 @@ class InstructionSelector:
             mips_emitter.emitComment(f"binary {dst_name} := {left} {op} {right} (no soportado)")
             return
 
-        # caso strings (concat aun no real)
-        if (
-            isinstance(left, str) and left.startswith('"') and left.endswith('"')
-        ) or (
-            isinstance(right, str) and right.startswith('"') and right.endswith('"')
-        ):
-            dst_reg = reg_left
-
-            if dst_name is None:
-                return
-
-            addr_dst = self.parseAddress(dst_name)
-            if addr_dst is not None:
-                dst_base, dst_off = addr_dst
-                mips_emitter.emitInstr("sw", dst_reg, f"{dst_off}({dst_base})")
-                return
-
-            if self.isTemp(dst_name):
-                # bind del temp al registro
-                self.reg_alloc.bindReg(dst_reg, dst_name)
-                return
-
-            return
-
-        # evitar que left y right queden en el mismo registro fisico salvo que sea el mismo temp
+        # evitar que left y right queden en el mismo registro físico salvo que sea el mismo temp
         if (
             reg_right == reg_left
             and not (self.isTemp(left) and self.isTemp(right) and left == right)
         ):
-            # mover right a scratch $at
             scratch = "$at"
 
             if self.isImmediate(right):
@@ -557,7 +641,7 @@ class InstructionSelector:
             ">=": "sge",
         }
 
-        # operacion aritmetica o comparacion
+        # operación aritmética o comparación
         if op in arith_ops:
             mips_op = arith_ops[op]
             mips_emitter.emitInstr(mips_op, dst_reg, reg_left, reg_right)
@@ -567,7 +651,6 @@ class InstructionSelector:
             mips_emitter.emitInstr(mips_op, dst_reg, reg_left, reg_right)
 
         else:
-            # operador no soportado
             mips_emitter.emitComment(f"operador binario '{op}' no soportado")
             return
 
@@ -579,16 +662,23 @@ class InstructionSelector:
 
         if addr_dst is not None:
             base_reg, offset = addr_dst
+
+            if self.isProtectedFrameSlot(base_reg, offset):
+                mips_emitter.emitComment(
+                    f"binary: intento de escribir en slot protegido fp[{offset}] (old fp/ra), se ignora"
+                )
+                return
+
             mips_emitter.emitInstr("sw", dst_reg, f"{offset}({base_reg})")
             return
 
         if self.isTemp(dst_name):
-            # asociar registro al temp
             self.reg_alloc.bindReg(dst_reg, dst_name)
             return
 
-        # destino no soportado
         mips_emitter.emitComment(f"binary destino {dst_name} no soportado, valor en {dst_reg}")
+
+
 
 
     def lowerReturn(self, quad, mips_emitter):
@@ -621,7 +711,6 @@ class InstructionSelector:
         # log de return final
         mips_emitter.emitComment(f"return {val} -> {ret_reg}")
 
-
     # ---------- llamadas ----------
 
     def lowerParam(self, quad, mips_emitter):
@@ -632,8 +721,6 @@ class InstructionSelector:
 
         # comentar el param para trazabilidad en el código mips generado
         mips_emitter.emitComment(f"param {arg}")
-
-
 
     def lowerCall(self, quad, mips_emitter):
         # call: prepara args, hace jal y limpia stack
@@ -747,7 +834,6 @@ class InstructionSelector:
             mips_emitter.emitComment(f"index_load {dst} := {base}[{idx}] (idx sin valor)")
             return
 
-
         offset_reg = self.reg_alloc.getRegFor(f"{dst}_idx_off", self.current_frame, mips_emitter)
         mips_emitter.emitInstr("move", offset_reg, idx_reg)
 
@@ -773,17 +859,18 @@ class InstructionSelector:
 
         mips_emitter.emitComment(f"index_load destino {dst} no soportado, valor queda en memoria")
 
-
     def lowerIndexStore(self, quad, mips_emitter):
         base = quad.arg1
         idx = quad.arg2 if quad.arg2 is not None else quad.label
         src = quad.res
 
-        # Caso especial: sin índice -> equivale a store simple
+        # Caso especial: sin índice -> store simple base[offset] := src
         if idx is None:
             addr = self.parseAddress(base)
             if addr is None:
-                mips_emitter.emitComment(f"index_store {base} := {src} (sin idx, base no soportada)")
+                mips_emitter.emitComment(
+                    f"index_store {base} := {src} (sin idx, base no soportada)"
+                )
                 return
 
             base_reg, offset = addr
@@ -793,25 +880,42 @@ class InstructionSelector:
                 mips_emitter
             )
             if src_reg is None:
-                mips_emitter.emitComment(f"index_store {base} := {src} (src no soportado)")
+                mips_emitter.emitComment(
+                    f"index_store {base} := {src} (src no soportado)"
+                )
+                return
+
+            if self.isProtectedFrameSlot(base_reg, offset):
+                mips_emitter.emitComment(
+                    f"index_store {base} := {src} intenta escribir en slot protegido "
+                    f"fp[{offset}], se ignora"
+                )
                 return
 
             mips_emitter.emitInstr("sw", src_reg, f"{offset}({base_reg})")
             return
 
-        # caso general: base[idx] := src
+        # ---------- caso general: base[idx] := src ----------
 
         # 1) registro base
         if isinstance(base, str) and base == "this":
             base_reg = getattr(self.machine_desc, "this_reg", None)
             if base_reg is None:
-                mips_emitter.emitComment("index_store con 'this' pero machine_desc.this_reg no definido")
+                mips_emitter.emitComment(
+                    "index_store con 'this' pero machine_desc.this_reg no definido"
+                )
                 return
         else:
-            base_reg = self.getValueReg(base, base if self.isTemp(base) else None, mips_emitter)
+            base_reg = self.getValueReg(
+                base,
+                base if self.isTemp(base) else None,
+                mips_emitter
+            )
 
         if base_reg is None:
-            mips_emitter.emitComment(f"index_store {base}[{idx}] := {src} (base no soportada)")
+            mips_emitter.emitComment(
+                f"index_store {base}[{idx}] := {src} (base no soportada)"
+            )
             return
 
         # 2) registro índice
@@ -831,15 +935,21 @@ class InstructionSelector:
             )
 
         if idx_reg is None:
-            mips_emitter.emitComment(f"index_store {base}[{idx}] := {src} (idx sin valor)")
+            mips_emitter.emitComment(
+                f"index_store {base}[{idx}] := {src} (idx sin valor)"
+            )
             return
 
-
-        offset_reg = self.reg_alloc.getRegFor(f"{src}_idx_off", self.current_frame, mips_emitter)
+        # 3) offset = idx (según TAC actual, sin escalar)
+        offset_reg = self.reg_alloc.getRegFor(
+            f"{src}_idx_off", self.current_frame, mips_emitter
+        )
         mips_emitter.emitInstr("move", offset_reg, idx_reg)
 
-        # addr = base + offset
-        addr_reg = self.reg_alloc.getRegFor(f"{src}_addr", self.current_frame, mips_emitter)
+        # 4) addr = base + offset
+        addr_reg = self.reg_alloc.getRegFor(
+            f"{src}_addr", self.current_frame, mips_emitter
+        )
         mips_emitter.emitInstr("add", addr_reg, base_reg, offset_reg)
 
         # 5) valor a guardar
@@ -849,11 +959,22 @@ class InstructionSelector:
             mips_emitter
         )
         if src_reg is None:
-            mips_emitter.emitComment(f"index_store {base}[{idx}] := {src} (src no soportado)")
+            mips_emitter.emitComment(
+                f"index_store {base}[{idx}] := {src} (src no soportado)"
+            )
             return
 
-        mips_emitter.emitInstr("sw", src_reg, f"0({addr_reg})")
+        # ⚠️ FIX REAL: evitar sw $reg, 0($reg) usando scratch físico $t9
+        if src_reg == addr_reg:
+            scratch = "$t9"   # registro físico reservado como scratch
+            mips_emitter.emitInstr("move", scratch, src_reg)
+            mips_emitter.emitComment(
+                f"index_store: src_reg == addr_reg ({src_reg}), usando scratch={scratch} "
+                f"para evitar sw {src_reg}, 0({src_reg})"
+            )
+            src_reg = scratch
 
+        mips_emitter.emitInstr("sw", src_reg, f"0({addr_reg})")
 
     def lowerNewObj(self, quad, mips_emitter):
         # preparar datos básicos
