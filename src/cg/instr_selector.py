@@ -207,7 +207,6 @@ class InstructionSelector:
 
 
     def emitCondBranch(self, cond_txt, target_label, branch_on_true, mips_emitter):
-        # parsear left, op, right desde la condición bruta
         left, op, right = self.parseCondition(cond_txt)
         if left is None or op is None:
             mips_emitter.emitComment(f"condición '{cond_txt}' no soportada")
@@ -218,20 +217,9 @@ class InstructionSelector:
             f"branch_on_true={branch_on_true}"
         )
 
-        # caso especial: temp usado como booleano (0/1) en comparaciones tipo tX > 0 o tX != 0
-        if self.isTemp(left) and right == "0" and op in (">", "!="):
-            reg_left = self.getValueReg(left, left, mips_emitter)
-            mips_emitter.emitComment(
-                f"emitCondBranch (bool-opt): usando {left} como booleano 0/1 en {reg_left}"
-            )
-
-            if branch_on_true:
-                # salto si tX != 0
-                mips_emitter.emitInstr("bne", reg_left, "$zero", target_label)
-            else:
-                # salto si tX == 0
-                mips_emitter.emitInstr("beq", reg_left, "$zero", target_label)
-            return
+        # 🚫 DESACTIVAR ESTE BLOQUE COMPLETO:
+        # if self.isTemp(left) and right == "0" and op in (">", "!="):
+        #     ...
 
         # si es ifFalse, invertir el operador para reutilizar un único flujo
         if not branch_on_true:
@@ -247,24 +235,19 @@ class InstructionSelector:
             op = negate.get(op, op)
             mips_emitter.emitComment(f"emitCondBranch: negando operador {old_op} -> {op}")
 
-        # cargar operandos: caso con inmediato en right y left no inmediato
+        # cargar operandos
         if self.isImmediate(right) and not self.isImmediate(left):
-            # cargar left en registro (con hint si es temp)
             reg_left = self.getValueReg(
                 left,
                 left if self.isTemp(left) else None,
                 mips_emitter
             )
-
-            # right inmediato → usar $at para no clobber
             reg_right = "$at"
             mips_emitter.emitComment(
                 f"emitCondBranch: right inmediato {right} -> {reg_right} (no pisa left)"
             )
             mips_emitter.emitInstr("li", reg_right, str(right))
-
         else:
-            # camino genérico: cargar ambos operandos
             reg_left = self.getValueReg(
                 left,
                 left if self.isTemp(left) else None,
@@ -284,7 +267,6 @@ class InstructionSelector:
             mips_emitter.emitComment(f"branch sobre '{cond_txt}' no soportado (operandos)")
             return
 
-        # mapear operador lógico al branch mips correspondiente
         branch_map = {
             "==": "beq",
             "!=": "bne",
@@ -302,6 +284,7 @@ class InstructionSelector:
             f"emitCondBranch: emitiendo {br_op} {reg_left}, {reg_right}, {target_label}"
         )
         mips_emitter.emitInstr(br_op, reg_left, reg_right, target_label)
+
 
 
     def lowerQuad(self, quad, mips_emitter):
@@ -819,6 +802,7 @@ class InstructionSelector:
                     f"call {func_label}: this_reg={this_reg} inicializado desde {this_arg}"
                 )
 
+
             # el resto sí va por stack
             stack_args = self.pending_params[1:]
         else:
@@ -1143,12 +1127,14 @@ class InstructionSelector:
             return
 
         if self.isTemp(dst):
-            # asociar retorno al temporal
+            # asociar retorno al temporal Y marcarlo como inicializado
             self.reg_alloc.bindReg(ret_reg, dst)
+            self.initialized_temps.add(dst)
             mips_emitter.emitComment(
                 f"newobj: puntero -> temp {dst} en {ret_reg}"
             )
             return
+
 
         # destino no soportado
         mips_emitter.emitComment(
