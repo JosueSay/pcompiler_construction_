@@ -61,6 +61,10 @@ class CodeGeneratorMips:
             if (not in_func) and (not main_emitted):
                 # primer quad fuera de función => empezar main sintético
                 self.mips_emitter.emitLabel("main")
+
+                # inicializar frame global para gp[...]
+                self.mips_emitter.emitInstr("la", "$gp", "__gp_base")
+
                 main_emitted = True
 
             # transformar cada quad a instrucciones mips

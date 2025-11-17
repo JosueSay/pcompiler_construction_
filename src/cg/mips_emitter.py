@@ -4,7 +4,7 @@ class MipsEmitter:
     def __init__(self, program_name):
         # guarda el nombre del programa para usarlo en los metadatos del asm
         self.program_name = program_name
-        self.data_lines = []
+        self.data_lines = ["__gp_base: .space 256"]
         self.text_lines = []
         self.current_label = None
 
@@ -13,9 +13,24 @@ class MipsEmitter:
         self.data_strings = []    # lista de (label, text)
         self.string_counter = 0
 
-    def emitData(self, line):
-        # agrega una línea a la sección .data
-        self.data_lines.append(line)
+    def emitData(self):
+        """
+        Genera la sección .data:
+        - Literales de string internados.
+        - Área de globals para gp[...] (ej. gp[0], gp[8], etc.).
+        """
+        lines = []
+        lines.append(".data")
+
+        # --- strings ---
+        for label, text in self.string_pool.items():
+            lines.append(f"{label}: .asciiz {text}")
+
+        # --- área para 'gp' (global frame) ---
+        # 256 bytes = 64 enteros de 4 bytes; te sobra para gp[0..252].
+        lines.append("__gp_base: .space 256")
+
+        return "\n".join(lines)
 
     def emitText(self, line):
         # agrega una línea directa a la sección .text
