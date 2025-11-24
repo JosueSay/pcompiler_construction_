@@ -1,0 +1,27 @@
+; Compiscript TAC
+; program: 20251124-112603_field_access_store_d1.cps
+; generated: 2025-11-24T11:26:03
+
+FUNCTION C_constructor:
+	t0 := 0
+	t1 := t0
+	this[t1] := fp[16]
+END FUNCTION C_constructor
+
+FUNCTION main:
+	t0 = newobj C, 4
+	PARAM t0
+	PARAM 10
+	CALL C_constructor, 2
+	fp[0] := t0
+	t2 := fp[0]
+	t3 := 0
+	t4 := t3
+	t1 := t2[t4]
+	fp[8] := t1
+	t5 := fp[8] + 2
+	t1 := 0
+	t4 := t1
+	fp[t4] := t5
+END FUNCTION main
+

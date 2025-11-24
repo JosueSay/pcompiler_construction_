@@ -1,0 +1,27 @@
+<!doctype html><meta charset='utf-8'><title>Compiscript TAC</title><style>body{font-family:ui-monospace,monospace}pre{line-height:1.3}</style><h3>Compiscript TAC — 20251124-112611_if_else_shortcircuit_d2.cps</h3><pre>; Compiscript TAC
+; program: 20251124-112611_if_else_shortcircuit_d2.cps
+; generated: 2025-11-24T11:26:11
+
+FUNCTION main:
+	fp[0] := 15
+	fp[4] := 5
+	t0 := fp[0] &lt; 10
+	IF t0 &gt; 0 GOTO IF_THEN1
+	GOTO Lor4
+Lor4:
+	t0 := fp[0] &gt; 20
+	IF t0 &gt; 0 GOTO Land5
+	GOTO IF_ELSE3
+Land5:
+	t0 := fp[0] != fp[4]
+	IF t0 &gt; 0 GOTO IF_THEN1
+	GOTO IF_ELSE3
+IF_THEN1:
+	fp[4] := 0
+	GOTO IF_END2
+IF_ELSE3:
+	fp[4] := 1
+IF_END2:
+END FUNCTION main
+
+</pre>

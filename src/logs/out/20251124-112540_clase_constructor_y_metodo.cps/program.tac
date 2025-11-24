@@ -1,0 +1,38 @@
+; Compiscript TAC
+; program: 20251124-112540_clase_constructor_y_metodo.cps
+; generated: 2025-11-24T11:25:40
+
+FUNCTION Counter_constructor:
+	t0 := 0
+	t1 := t0
+	this[t1] := fp[16]
+END FUNCTION Counter_constructor
+
+FUNCTION Counter_inc:
+	t1 := 0
+	t2 := t1
+	t0 := this[t2]
+	t3 := t0 + 1
+	t2 := 0
+	t1 := t2
+	this[t1] := t3
+END FUNCTION Counter_inc
+
+FUNCTION Counter_get:
+	t1 := 0
+	t2 := t1
+	t0 := this[t2]
+	RETURN t0
+END FUNCTION Counter_get
+
+	t3 = newobj Counter, 4
+	PARAM t3
+	PARAM 5
+	CALL Counter_constructor, 2
+	gp[0] := t3
+	PARAM gp[0]
+	CALL Counter_inc, 1
+	PARAM gp[0]
+	CALL Counter_get, 1
+	t0 := R
+	gp[8] := t0

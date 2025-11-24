@@ -1,0 +1,31 @@
+; Compiscript TAC
+; program: 20251124-112539_clase_metodo_this_d2.cps
+; generated: 2025-11-24T11:25:39
+
+FUNCTION Box_constructor:
+	t0 := 0
+	t1 := t0
+	this[t1] := fp[16]
+END FUNCTION Box_constructor
+
+FUNCTION Box_inc:
+	t1 := 0
+	t2 := t1
+	t0 := this[t2]
+	t3 := t0 + fp[16]
+	RETURN t3
+END FUNCTION Box_inc
+
+FUNCTION main:
+	t0 = newobj Box, 4
+	PARAM t0
+	PARAM 10
+	CALL Box_constructor, 2
+	fp[0] := t0
+	PARAM fp[0]
+	PARAM 5
+	CALL Box_inc, 2
+	t1 := R
+	fp[8] := t1
+END FUNCTION main
+
