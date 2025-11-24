@@ -1,0 +1,231 @@
+Program  «classAnimal{letnombre:string;functionconstructor(nombre:string){this.nombre=nomb...»
+  Statement  «classAnimal{letnombre:string;functionconstructor(nombre:string){this.nombre=nomb...»
+    ClassDeclaration  «classAnimal{letnombre:string;functionconstructor(nombre:string){this.nombre=nomb...»
+      TerminalNodeImpl  «class»
+      TerminalNodeImpl  «Animal»
+      TerminalNodeImpl  «{»
+      ClassMember  «letnombre:string;»
+        VariableDeclaration  «letnombre:string;»
+          TerminalNodeImpl  «let»
+          TerminalNodeImpl  «nombre»
+          TypeAnnotation  «:string»
+            TerminalNodeImpl  «:»
+            Type  «string»
+              BaseType  «string»
+                TerminalNodeImpl  «string»
+          TerminalNodeImpl  «;»
+      ClassMember  «functionconstructor(nombre:string){this.nombre=nombre;}»
+        FunctionDeclaration  «functionconstructor(nombre:string){this.nombre=nombre;}»
+          TerminalNodeImpl  «function»
+          TerminalNodeImpl  «constructor»
+          TerminalNodeImpl  «(»
+          Parameters  «nombre:string»
+            Parameter  «nombre:string»
+              TerminalNodeImpl  «nombre»
+              TerminalNodeImpl  «:»
+              Type  «string»
+                BaseType  «string»
+                  TerminalNodeImpl  «string»
+          TerminalNodeImpl  «)»
+          Block  «{this.nombre=nombre;}»
+            TerminalNodeImpl  «{»
+            Statement  «this.nombre=nombre;»
+              Assignment  «this.nombre=nombre;»
+                Expression  «this»
+                  ExprNoAssign  «this»
+                    TernaryExpr  «this»
+                      LogicalOrExpr  «this»
+                        LogicalAndExpr  «this»
+                          EqualityExpr  «this»
+                            RelationalExpr  «this»
+                              AdditiveExpr  «this»
+                                MultiplicativeExpr  «this»
+                                  UnaryExpr  «this»
+                                    PrimaryExpr  «this»
+                                      LeftHandSide  «this»
+                                        ThisExpr  «this»
+                                          TerminalNodeImpl  «this»
+                TerminalNodeImpl  «.»
+                TerminalNodeImpl  «nombre»
+                TerminalNodeImpl  «=»
+                Expression  «nombre»
+                  ExprNoAssign  «nombre»
+                    TernaryExpr  «nombre»
+                      LogicalOrExpr  «nombre»
+                        LogicalAndExpr  «nombre»
+                          EqualityExpr  «nombre»
+                            RelationalExpr  «nombre»
+                              AdditiveExpr  «nombre»
+                                MultiplicativeExpr  «nombre»
+                                  UnaryExpr  «nombre»
+                                    PrimaryExpr  «nombre»
+                                      LeftHandSide  «nombre»
+                                        IdentifierExpr  «nombre»
+                                          TerminalNodeImpl  «nombre»
+                TerminalNodeImpl  «;»
+            TerminalNodeImpl  «}»
+      ClassMember  «functionhablar():string{returnthis.nombre+" hace ruido.";}»
+        FunctionDeclaration  «functionhablar():string{returnthis.nombre+" hace ruido.";}»
+          TerminalNodeImpl  «function»
+          TerminalNodeImpl  «hablar»
+          TerminalNodeImpl  «(»
+          TerminalNodeImpl  «)»
+          TerminalNodeImpl  «:»
+          Type  «string»
+            BaseType  «string»
+              TerminalNodeImpl  «string»
+          Block  «{returnthis.nombre+" hace ruido.";}»
+            TerminalNodeImpl  «{»
+            Statement  «returnthis.nombre+" hace ruido.";»
+              ReturnStatement  «returnthis.nombre+" hace ruido.";»
+                TerminalNodeImpl  «return»
+                Expression  «this.nombre+" hace ruido."»
+                  ExprNoAssign  «this.nombre+" hace ruido."»
+                    TernaryExpr  «this.nombre+" hace ruido."»
+                      LogicalOrExpr  «this.nombre+" hace ruido."»
+                        LogicalAndExpr  «this.nombre+" hace ruido."»
+                          EqualityExpr  «this.nombre+" hace ruido."»
+                            RelationalExpr  «this.nombre+" hace ruido."»
+                              AdditiveExpr  «this.nombre+" hace ruido."»
+                                MultiplicativeExpr  «this.nombre»
+                                  UnaryExpr  «this.nombre»
+                                    PrimaryExpr  «this.nombre»
+                                      LeftHandSide  «this.nombre»
+                                        ThisExpr  «this»
+                                          TerminalNodeImpl  «this»
+                                        PropertyAccessExpr  «.nombre»
+                                          TerminalNodeImpl  «.»
+                                          TerminalNodeImpl  «nombre»
+                                TerminalNodeImpl  «+»
+                                MultiplicativeExpr  «" hace ruido."»
+                                  UnaryExpr  «" hace ruido."»
+                                    PrimaryExpr  «" hace ruido."»
+                                      LiteralExpr  «" hace ruido."»
+                                        TerminalNodeImpl  «" hace ruido."»
+                TerminalNodeImpl  «;»
+            TerminalNodeImpl  «}»
+      TerminalNodeImpl  «}»
+  Statement  «classPerro:Animal{functionhablar():string{returnthis.nombre+" ladra.";}}»
+    ClassDeclaration  «classPerro:Animal{functionhablar():string{returnthis.nombre+" ladra.";}}»
+      TerminalNodeImpl  «class»
+      TerminalNodeImpl  «Perro»
+      TerminalNodeImpl  «:»
+      TerminalNodeImpl  «Animal»
+      TerminalNodeImpl  «{»
+      ClassMember  «functionhablar():string{returnthis.nombre+" ladra.";}»
+        FunctionDeclaration  «functionhablar():string{returnthis.nombre+" ladra.";}»
+          TerminalNodeImpl  «function»
+          TerminalNodeImpl  «hablar»
+          TerminalNodeImpl  «(»
+          TerminalNodeImpl  «)»
+          TerminalNodeImpl  «:»
+          Type  «string»
+            BaseType  «string»
+              TerminalNodeImpl  «string»
+          Block  «{returnthis.nombre+" ladra.";}»
+            TerminalNodeImpl  «{»
+            Statement  «returnthis.nombre+" ladra.";»
+              ReturnStatement  «returnthis.nombre+" ladra.";»
+                TerminalNodeImpl  «return»
+                Expression  «this.nombre+" ladra."»
+                  ExprNoAssign  «this.nombre+" ladra."»
+                    TernaryExpr  «this.nombre+" ladra."»
+                      LogicalOrExpr  «this.nombre+" ladra."»
+                        LogicalAndExpr  «this.nombre+" ladra."»
+                          EqualityExpr  «this.nombre+" ladra."»
+                            RelationalExpr  «this.nombre+" ladra."»
+                              AdditiveExpr  «this.nombre+" ladra."»
+                                MultiplicativeExpr  «this.nombre»
+                                  UnaryExpr  «this.nombre»
+                                    PrimaryExpr  «this.nombre»
+                                      LeftHandSide  «this.nombre»
+                                        ThisExpr  «this»
+                                          TerminalNodeImpl  «this»
+                                        PropertyAccessExpr  «.nombre»
+                                          TerminalNodeImpl  «.»
+                                          TerminalNodeImpl  «nombre»
+                                TerminalNodeImpl  «+»
+                                MultiplicativeExpr  «" ladra."»
+                                  UnaryExpr  «" ladra."»
+                                    PrimaryExpr  «" ladra."»
+                                      LiteralExpr  «" ladra."»
+                                        TerminalNodeImpl  «" ladra."»
+                TerminalNodeImpl  «;»
+            TerminalNodeImpl  «}»
+      TerminalNodeImpl  «}»
+  Statement  «letp:Perro=newPerro("Toby");»
+    VariableDeclaration  «letp:Perro=newPerro("Toby");»
+      TerminalNodeImpl  «let»
+      TerminalNodeImpl  «p»
+      TypeAnnotation  «:Perro»
+        TerminalNodeImpl  «:»
+        Type  «Perro»
+          BaseType  «Perro»
+            TerminalNodeImpl  «Perro»
+      Initializer  «=newPerro("Toby")»
+        TerminalNodeImpl  «=»
+        Expression  «newPerro("Toby")»
+          ExprNoAssign  «newPerro("Toby")»
+            TernaryExpr  «newPerro("Toby")»
+              LogicalOrExpr  «newPerro("Toby")»
+                LogicalAndExpr  «newPerro("Toby")»
+                  EqualityExpr  «newPerro("Toby")»
+                    RelationalExpr  «newPerro("Toby")»
+                      AdditiveExpr  «newPerro("Toby")»
+                        MultiplicativeExpr  «newPerro("Toby")»
+                          UnaryExpr  «newPerro("Toby")»
+                            PrimaryExpr  «newPerro("Toby")»
+                              LeftHandSide  «newPerro("Toby")»
+                                NewExpr  «newPerro("Toby")»
+                                  TerminalNodeImpl  «new»
+                                  TerminalNodeImpl  «Perro»
+                                  TerminalNodeImpl  «(»
+                                  Arguments  «"Toby"»
+                                    Expression  «"Toby"»
+                                      ExprNoAssign  «"Toby"»
+                                        TernaryExpr  «"Toby"»
+                                          LogicalOrExpr  «"Toby"»
+                                            LogicalAndExpr  «"Toby"»
+                                              EqualityExpr  «"Toby"»
+                                                RelationalExpr  «"Toby"»
+                                                  AdditiveExpr  «"Toby"»
+                                                    MultiplicativeExpr  «"Toby"»
+                                                      UnaryExpr  «"Toby"»
+                                                        PrimaryExpr  «"Toby"»
+                                                          LiteralExpr  «"Toby"»
+                                                            TerminalNodeImpl  «"Toby"»
+                                  TerminalNodeImpl  «)»
+      TerminalNodeImpl  «;»
+  Statement  «lets:string=p.hablar();»
+    VariableDeclaration  «lets:string=p.hablar();»
+      TerminalNodeImpl  «let»
+      TerminalNodeImpl  «s»
+      TypeAnnotation  «:string»
+        TerminalNodeImpl  «:»
+        Type  «string»
+          BaseType  «string»
+            TerminalNodeImpl  «string»
+      Initializer  «=p.hablar()»
+        TerminalNodeImpl  «=»
+        Expression  «p.hablar()»
+          ExprNoAssign  «p.hablar()»
+            TernaryExpr  «p.hablar()»
+              LogicalOrExpr  «p.hablar()»
+                LogicalAndExpr  «p.hablar()»
+                  EqualityExpr  «p.hablar()»
+                    RelationalExpr  «p.hablar()»
+                      AdditiveExpr  «p.hablar()»
+                        MultiplicativeExpr  «p.hablar()»
+                          UnaryExpr  «p.hablar()»
+                            PrimaryExpr  «p.hablar()»
+                              LeftHandSide  «p.hablar()»
+                                IdentifierExpr  «p»
+                                  TerminalNodeImpl  «p»
+                                PropertyAccessExpr  «.hablar»
+                                  TerminalNodeImpl  «.»
+                                  TerminalNodeImpl  «hablar»
+                                CallExpr  «()»
+                                  TerminalNodeImpl  «(»
+                                  TerminalNodeImpl  «)»
+      TerminalNodeImpl  «;»
+  TerminalNodeImpl  «<EOF>»

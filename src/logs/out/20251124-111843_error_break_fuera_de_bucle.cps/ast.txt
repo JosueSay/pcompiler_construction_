@@ -1,0 +1,6 @@
+Program  «break;<EOF>»
+  Statement  «break;»
+    BreakStatement  «break;»
+      TerminalNodeImpl  «break»
+      TerminalNodeImpl  «;»
+  TerminalNodeImpl  «<EOF>»

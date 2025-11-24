@@ -1,0 +1,25 @@
+<!doctype html><meta charset='utf-8'><title>Compiscript TAC</title><style>body{font-family:ui-monospace,monospace}pre{line-height:1.3}</style><h3>Compiscript TAC — 20251124-111712_success_literal_homogeneo.cps</h3><pre>; Compiscript TAC
+; program: 20251124-111712_success_literal_homogeneo.cps
+; generated: 2025-11-24T11:17:12
+
+	gp[0] := [1,2,3]
+	t1 = len gp[0]
+	IF 0&lt;0 GOTO oob1
+	IF 0&gt;=t1 GOTO oob1
+	GOTO ok2
+oob1:
+	CALL __bounds_error, 0
+ok2:
+	t0 := gp[0][0]
+	gp[8] := t0
+	gp[12] := [[1,2],[3,4]]
+	t0 = len gp[12]
+	IF 1&lt;0 GOTO oob3
+	IF 1&gt;=t0 GOTO oob3
+	GOTO ok4
+oob3:
+	CALL __bounds_error, 0
+ok4:
+	t2 := gp[12][1]
+	gp[20] := t2
+</pre>

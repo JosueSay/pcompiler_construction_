@@ -1,0 +1,6 @@
+Program  «return;<EOF>»
+  Statement  «return;»
+    ReturnStatement  «return;»
+      TerminalNodeImpl  «return»
+      TerminalNodeImpl  «;»
+  TerminalNodeImpl  «<EOF>»

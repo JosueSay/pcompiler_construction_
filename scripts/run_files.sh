@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Ruta de los .cps
-RUTA="./src/test/tac"
+RUTA="./src/test/smoke"
 
 # Mostrar contenidos de los archivos
 for f in "$RUTA"/*.cps; do
